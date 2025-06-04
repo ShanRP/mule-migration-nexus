@@ -10,12 +10,16 @@ import {
   Server, 
   GitBranch, 
   TrendingUp,
-  ArrowRight
+  ArrowRight,
+  Building,
+  Users
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useOrganizations } from "@/providers/OrganizationProvider";
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const { selectedOrganization, organizations, loading: orgLoading } = useOrganizations();
 
   const stats = [
     {
@@ -73,16 +77,57 @@ const Dashboard = () => {
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Migration Dashboard</h1>
+          <div className="flex items-center space-x-3 mb-2">
+            <h1 className="text-3xl font-bold text-gray-900">Migration Dashboard</h1>
+            {selectedOrganization && (
+              <div className="flex items-center space-x-2 px-3 py-1 bg-blue-50 rounded-full">
+                <Building className="h-4 w-4 text-blue-600" />
+                <span className="text-sm font-medium text-blue-800">{selectedOrganization.name}</span>
+              </div>
+            )}
+          </div>
           <p className="text-gray-600 mt-1">
             Monitor your CloudHub 1.0 to CloudHub 2.0 migration progress
           </p>
+          {organizations.length > 1 && (
+            <p className="text-sm text-gray-500 mt-1">
+              Managing {organizations.length} organizations
+            </p>
+          )}
         </div>
         <Button onClick={() => navigate("/migration")} className="bg-blue-600 hover:bg-blue-700">
           Start New Scan
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>
+
+      {/* Organization Stats */}
+      {selectedOrganization && (
+        <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-4">
+                <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center">
+                  <span className="text-white font-bold text-lg">{selectedOrganization.initial}</span>
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-gray-900">{selectedOrganization.name}</h3>
+                  <div className="flex items-center space-x-4 text-sm text-gray-600">
+                    <span>Session: {selectedOrganization.session_timeout}</span>
+                    <span className="flex items-center">
+                      <Users className="h-4 w-4 mr-1" />
+                      Invite: {selectedOrganization.invite_enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <Badge variant="secondary" className="bg-blue-100 text-blue-800">
+                Active Organization
+              </Badge>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

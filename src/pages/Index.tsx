@@ -8,6 +8,7 @@ import Applications from "@/components/Applications";
 import LandingPage from "@/components/LandingPage";
 import AuthProvider, { useAuth } from "@/components/AuthProvider";
 import AuthPage from "@/pages/Auth";
+import { OrganizationProvider } from "@/providers/OrganizationProvider";
 
 const AppContent = () => {
   const { user, loading } = useAuth();
@@ -34,18 +35,20 @@ const AppContent = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Header />
-      <main className="pt-16">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/migration" element={<Migration />} />
-          <Route path="/applications" element={<Applications />} />
-          <Route path="/auth" element={<Navigate to="/" replace />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </main>
-    </div>
+    <OrganizationProvider>
+      <div className="min-h-screen bg-gray-50">
+        <Header />
+        <main className="pt-16">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/migration" element={<Migration />} />
+            <Route path="/applications" element={<Applications />} />
+            <Route path="/auth" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </main>
+      </div>
+    </OrganizationProvider>
   );
 };
 
