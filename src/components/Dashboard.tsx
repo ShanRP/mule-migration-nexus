@@ -107,11 +107,11 @@ const Dashboard = () => {
     return null;
   };
 
-  const fetchAzureFileContent = async (organization: string, project: string, repoName: string, filePath: string, token: string): Promise<string | null> => {
+  const fetchAzureFileContent = async (organization: string, project: string, repoId: string, filePath: string, token: string): Promise<string | null> => {
     try {
-      console.log(`Fetching ${filePath} from Azure DevOps repo ${organization}/${project}/${repoName}`);
+      console.log(`Fetching ${filePath} from Azure DevOps repo ${organization}/${project}/${repoId}`);
       const response = await axios.get(
-        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=/${filePath}&api-version=6.0`,
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoId}/items?path=/${filePath}&api-version=6.0`,
         { 
           headers: { 
             Authorization: `Basic ${btoa(':' + token)}`,
@@ -149,11 +149,13 @@ const Dashboard = () => {
     return files;
   };
 
-  const listAllAzureFiles = async (organization: string, project: string, repoName: string, path: string, token: string): Promise<string[]> => {
+  const listAllAzureFiles = async (organization: string, project: string, repoId: string, path: string, token: string): Promise<string[]> => {
     let files: string[] = [];
     try {
+      console.log(`Listing files in Azure DevOps repo: org=${organization}, project=${project}, repoId=${repoId}, path=${path}`);
+      
       const res = await axios.get(
-        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=${path}&recursionLevel=Full&api-version=6.0`,
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoId}/items?path=${path}&recursionLevel=Full&api-version=6.0`,
         { 
           headers: { 
             Authorization: `Basic ${btoa(':' + token)}`,
@@ -161,10 +163,12 @@ const Dashboard = () => {
           } 
         }
       );
+      
       if (res.data && res.data.value) {
         files = res.data.value
-          .filter((item: any) => !item.isFolder)
+          .filter((item: any) => !item.isFolder && item.path)
           .map((item: any) => item.path.substring(1)); // Remove leading slash
+        console.log(`Successfully listed ${files.length} files from Azure DevOps`);
       }
     } catch (e) {
       console.log('Error listing Azure DevOps files:', e);
@@ -334,7 +338,8 @@ const Dashboard = () => {
             allRepos.push({
               ...repo,
               project: project.name,
-              organization
+              organization,
+              repoId: repo.id // Store the actual repository ID
             });
           }
         } catch (error) {
@@ -351,8 +356,10 @@ const Dashboard = () => {
     const muleApps: MuleApplication[] = [];
     for (const repo of allRepos) {
       try {
-        console.log(`Scanning Azure DevOps repo: ${repo.name} in project ${repo.project}`);
-        const allFiles = await listAllAzureFiles(organization, repo.project, repo.name, '', token);
+        console.log(`Scanning Azure DevOps repo: ${repo.name} (ID: ${repo.repoId}) in project ${repo.project}`);
+        
+        // Use the repository ID instead of name for API calls
+        const allFiles = await listAllAzureFiles(organization, repo.project, repo.repoId, '', token);
         console.log(`Found ${allFiles.length} total files in repo ${repo.name}`);
         
         const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
@@ -367,7 +374,7 @@ const Dashboard = () => {
         
         for (const pomPath of pomFiles) {
           console.log(`Processing pom.xml: ${pomPath}`);
-          const pomXml = await fetchAzureFileContent(organization, repo.project, repo.name, pomPath, token);
+          const pomXml = await fetchAzureFileContent(organization, repo.project, repo.repoId, pomPath, token);
           if (!pomXml || !isMuleApplication(pomXml)) {
             console.log(`Not a Mule application: ${pomPath}`);
             continue;
@@ -388,7 +395,7 @@ const Dashboard = () => {
           
           for (const ajPath of artifactJsonPaths) {
             console.log(`Looking for artifact JSON at: ${ajPath}`);
-            const artifactJsonContent = await fetchAzureFileContent(organization, repo.project, repo.name, ajPath, token);
+            const artifactJsonContent = await fetchAzureFileContent(organization, repo.project, repo.repoId, ajPath, token);
             if (artifactJsonContent) {
               try {
                 artifactJson = JSON.parse(artifactJsonContent);
@@ -412,7 +419,7 @@ const Dashboard = () => {
           ].filter(path => path !== '/');
           
           for (const configPath of configPaths) {
-            const configXml = await fetchAzureFileContent(organization, repo.project, repo.name, configPath, token);
+            const configXml = await fetchAzureFileContent(organization, repo.project, repo.repoId, configPath, token);
             if (configXml) {
               connectors = analyzeMuleConfiguration(configXml);
               console.log(`Found ${connectors.length} connectors in ${configPath}`);
@@ -425,7 +432,7 @@ const Dashboard = () => {
             const muleFiles = allFiles.filter(f => f.startsWith(muleDirPath) && f.endsWith('.xml'));
             console.log(`Checking ${muleFiles.length} XML files in mule directory`);
             for (const xmlFile of muleFiles) {
-              const xmlContent = await fetchAzureFileContent(organization, repo.project, repo.name, xmlFile, token);
+              const xmlContent = await fetchAzureFileContent(organization, repo.project, repo.repoId, xmlFile, token);
               if (xmlContent) {
                 const fileConnectors = analyzeMuleConfiguration(xmlContent);
                 connectors = [...connectors, ...fileConnectors];
@@ -440,7 +447,7 @@ const Dashboard = () => {
           const relatedProjectXmlFiles = projectXmlFiles.filter(f => f.startsWith(pomDir));
           
           muleApps.push({
-            id: `${repo.id}-${pomPath}`,
+            id: `${repo.repoId}-${pomPath}`,
             name: repo.name,
             repository: repo.webUrl || `https://dev.azure.com/${organization}/${repo.project}/_git/${repo.name}`,
             branch: repo.defaultBranch?.replace('refs/heads/', '') || 'main',
