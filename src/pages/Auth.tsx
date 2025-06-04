@@ -48,16 +48,7 @@ const AuthPage = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
       <div className="w-full max-w-md p-6">
-        {/* Back to home link */}
-        <div className="mb-6">
-          <Button 
-            variant="ghost" 
-            onClick={() => navigate("/")}
-            className="text-gray-600 hover:text-gray-900"
-          >
-            ← Back to Home
-          </Button>
-        </div>
+        
 
         <Card className="w-full">
           <CardHeader className="text-center">
