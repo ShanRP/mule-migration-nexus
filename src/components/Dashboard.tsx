@@ -111,7 +111,7 @@ const Dashboard = () => {
     try {
       console.log(`Fetching ${filePath} from Azure DevOps repo ${organization}/${project}/${repoName}`);
       const response = await axios.get(
-        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=${filePath}&api-version=6.0`,
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=/${filePath}&api-version=6.0`,
         { 
           headers: { 
             Authorization: `Basic ${btoa(':' + token)}`,
@@ -166,7 +166,9 @@ const Dashboard = () => {
           .filter((item: any) => !item.isFolder)
           .map((item: any) => item.path.substring(1)); // Remove leading slash
       }
-    } catch (e) {}
+    } catch (e) {
+      console.log('Error listing Azure DevOps files:', e);
+    }
     return files;
   };
 
@@ -311,6 +313,8 @@ const Dashboard = () => {
         }
       );
       
+      console.log('Azure DevOps projects found:', projectsRes.data.value.length);
+      
       // Then get repositories for each project
       for (const project of projectsRes.data.value) {
         try {
@@ -323,6 +327,8 @@ const Dashboard = () => {
               } 
             }
           );
+          
+          console.log(`Found ${reposRes.data.value.length} repositories in project ${project.name}`);
           
           for (const repo of reposRes.data.value) {
             allRepos.push({
@@ -340,31 +346,76 @@ const Dashboard = () => {
       throw error;
     }
 
+    console.log(`Total Azure DevOps repositories to scan: ${allRepos.length}`);
+
     const muleApps: MuleApplication[] = [];
     for (const repo of allRepos) {
       try {
+        console.log(`Scanning Azure DevOps repo: ${repo.name} in project ${repo.project}`);
         const allFiles = await listAllAzureFiles(organization, repo.project, repo.name, '', token);
+        console.log(`Found ${allFiles.length} total files in repo ${repo.name}`);
+        
         const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
+        const artifactJsonFiles = allFiles.filter(f => f.endsWith('mule-artifact.json'));
+        const projectXmlFiles = allFiles.filter(f => f.endsWith('.xml') && f.includes('src/main/mule/'));
+        
+        console.log(`Found in ${repo.name}:`, { 
+          pomFiles: pomFiles.length, 
+          artifactJsonFiles: artifactJsonFiles.length, 
+          projectXmlFiles: projectXmlFiles.length 
+        });
         
         for (const pomPath of pomFiles) {
+          console.log(`Processing pom.xml: ${pomPath}`);
           const pomXml = await fetchAzureFileContent(organization, repo.project, repo.name, pomPath, token);
-          if (!pomXml || !isMuleApplication(pomXml)) continue;
+          if (!pomXml || !isMuleApplication(pomXml)) {
+            console.log(`Not a Mule application: ${pomPath}`);
+            continue;
+          }
           
-          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+          console.log(`Found Mule application in: ${pomPath}`);
+          
+          // Find corresponding mule-artifact.json file
+          const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/')) || '';
+          let artifactJson = null;
+          
+          // Try different paths for mule-artifact.json
+          const artifactJsonPaths = [
+            `${pomDir}/src/main/mule/mule-artifact.json`,
+            `${pomDir}/mule-artifact.json`,
+            `${pomDir}/src/main/resources/mule-artifact.json`
+          ].filter(path => path !== '/'); // Remove invalid paths
+          
+          for (const ajPath of artifactJsonPaths) {
+            console.log(`Looking for artifact JSON at: ${ajPath}`);
+            const artifactJsonContent = await fetchAzureFileContent(organization, repo.project, repo.name, ajPath, token);
+            if (artifactJsonContent) {
+              try {
+                artifactJson = JSON.parse(artifactJsonContent);
+                console.log('Successfully parsed artifact JSON:', artifactJson);
+                break;
+              } catch (error) {
+                console.log('Error parsing artifact JSON:', error);
+              }
+            }
+          }
+          
+          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml, artifactJson);
+          console.log('Extracted Mule info:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies: dependencies.length });
           
           let connectors: any[] = [];
-          const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
           const configPaths = [
             `${pomDir}/src/main/mule/mule-configuration.xml`,
             `${pomDir}/src/main/app/mule-configuration.xml`,
             `${pomDir}/src/main/resources/mule-configuration.xml`,
             `${pomDir}/mule-configuration.xml`
-          ];
+          ].filter(path => path !== '/');
           
           for (const configPath of configPaths) {
             const configXml = await fetchAzureFileContent(organization, repo.project, repo.name, configPath, token);
             if (configXml) {
               connectors = analyzeMuleConfiguration(configXml);
+              console.log(`Found ${connectors.length} connectors in ${configPath}`);
               break;
             }
           }
@@ -372,19 +423,27 @@ const Dashboard = () => {
           if (connectors.length === 0) {
             const muleDirPath = `${pomDir}/src/main/mule`;
             const muleFiles = allFiles.filter(f => f.startsWith(muleDirPath) && f.endsWith('.xml'));
+            console.log(`Checking ${muleFiles.length} XML files in mule directory`);
             for (const xmlFile of muleFiles) {
               const xmlContent = await fetchAzureFileContent(organization, repo.project, repo.name, xmlFile, token);
               if (xmlContent) {
-                connectors = [...connectors, ...analyzeMuleConfiguration(xmlContent)];
+                const fileConnectors = analyzeMuleConfiguration(xmlContent);
+                connectors = [...connectors, ...fileConnectors];
               }
             }
           }
+          
+          console.log(`Total connectors found: ${connectors.length}`);
+          
+          // Get file paths for this pom directory
+          const relatedArtifactJsonFiles = artifactJsonFiles.filter(f => f.startsWith(pomDir));
+          const relatedProjectXmlFiles = projectXmlFiles.filter(f => f.startsWith(pomDir));
           
           muleApps.push({
             id: `${repo.id}-${pomPath}`,
             name: repo.name,
             repository: repo.webUrl || `https://dev.azure.com/${organization}/${repo.project}/_git/${repo.name}`,
-            branch: repo.defaultBranch || 'main',
+            branch: repo.defaultBranch?.replace('refs/heads/', '') || 'main',
             applicationName,
             muleRuntime,
             muleVersion,
@@ -392,13 +451,24 @@ const Dashboard = () => {
             dependencies,
             connectors,
             status: 'pending',
-            lastUpdated: new Date().toISOString()
+            lastUpdated: new Date().toISOString(),
+            pomPaths: [pomPath],
+            artifactJsonPaths: relatedArtifactJsonFiles,
+            projectXmlPaths: relatedProjectXmlFiles
+          });
+          
+          console.log(`Added Mule app: ${applicationName} with paths:`, {
+            pomPaths: [pomPath],
+            artifactJsonPaths: relatedArtifactJsonFiles,
+            projectXmlPaths: relatedProjectXmlFiles
           });
         }
       } catch (error) {
         console.log(`Error processing Azure repo ${repo.name}:`, error);
       }
     }
+    
+    console.log(`Total Mule applications found in Azure DevOps: ${muleApps.length}`);
     return muleApps;
   };
 
@@ -429,6 +499,7 @@ const Dashboard = () => {
           toast.error('Please provide a valid Azure DevOps organization URL');
           return;
         }
+        console.log('Azure DevOps organization:', organization);
         muleApps = await scanAzureRepositories(azureToken, organization);
       }
 

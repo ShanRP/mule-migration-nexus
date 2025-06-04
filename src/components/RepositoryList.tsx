@@ -129,21 +129,15 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     return { pomPaths, artifactJsonPaths, projectXmlPaths };
   };
 
-  // Helper function to update dependency versions in POM XML
+  // Helper function to update dependency versions in POM XML (ONLY app.runtime)
   const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[]): string => {
     let updatedPom = pomXml;
     
-    // Update app.runtime version
+    // ONLY update app.runtime version to 4.9.0
     const latestMuleVersion = getLatestMuleVersion();
     updatedPom = updatedPom.replace(
       /<app\.runtime>.*?<\/app\.runtime>/g,
       `<app.runtime>${latestMuleVersion}</app.runtime>`
-    );
-    
-    // Update mule.maven.plugin.version if present
-    updatedPom = updatedPom.replace(
-      /<mule\.maven\.plugin\.version>.*?<\/mule\.maven\.plugin\.version>/g,
-      `<mule.maven.plugin.version>4.9.0</mule.maven.plugin.version>`
     );
     
     // Update each dependency to its latest version
@@ -269,7 +263,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
       console.log('No pom.xml files found to update');
     }
     
-    // 4. Update all mule-artifact.json files
+    // 4. Update all mule-artifact.json files (ONLY Java version, no migration key)
     if (artifactJsonPaths && artifactJsonPaths.length > 0) {
       console.log('Processing artifact JSON files:', artifactJsonPaths);
       
@@ -285,12 +279,11 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           const ajSha = ajRes.data.sha;
           const ajJson = JSON.parse(atob(ajRes.data.content.replace(/\n/g, '')));
           
-          // Update Java version to latest
+          // Update Java version to latest (NO migration key)
           const latestJavaVersion = getLatestJavaVersion();
           const updatedAj = { 
             ...ajJson, 
-            javaSpecificationVersions: [latestJavaVersion],
-            migration: 'CloudHub 2.0' 
+            javaSpecificationVersions: [latestJavaVersion]
           };
           
           await axios.put(
@@ -354,11 +347,15 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
   };
 
   const migrateAzureApplication = async (app: MuleApplication) => {
+    console.log('Starting Azure DevOps migration for app:', app.applicationName);
+    
     // Extract organization, project, and repo name from repository URL
     const urlParts = app.repository.split('/');
     const organization = urlParts[3]; // dev.azure.com/{org}
     const project = urlParts[4];
     const repoName = urlParts[6];
+    
+    console.log('Azure DevOps details:', { organization, project, repoName });
     
     // Get the repository details
     const repoRes = await axios.get(
@@ -373,6 +370,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     
     // Get the default branch
     const defaultBranchName = repoRes.data.defaultBranch.replace('refs/heads/', '');
+    console.log('Default branch:', defaultBranchName);
     
     // Get latest commit from default branch
     const commitsRes = await axios.get(
@@ -385,25 +383,12 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
       }
     );
     const latestCommitId = commitsRes.data.value[0].commitId;
-    
-    // Get pom.xml content
-    const pomRes = await axios.get(
-      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=pom.xml&api-version=6.0`,
-      { 
-        headers: { 
-          Authorization: `Basic ${btoa(':' + azureToken)}`,
-          'Content-Type': 'application/json'
-        } 
-      }
-    );
-    const pomXml = pomRes.data;
-    
-    // Update dependencies (for demo, just append a comment)
-    const updatedPom = pomXml + '\n<!-- Updated for CloudHub 2.0 migration -->';
+    console.log('Latest commit ID:', latestCommitId);
     
     // Create new branch
     const newBranch = 'mulemigration';
     try {
+      console.log(`Creating new branch: ${newBranch}`);
       await axios.post(
         `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/refs?api-version=6.0`,
         {
@@ -418,37 +403,152 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           } 
         }
       );
+      console.log('Branch created successfully');
     } catch (e) {
-      // Branch may already exist
+      console.log('Branch may already exist, continuing...');
     }
     
-    // Push updated pom.xml to new branch
-    await axios.post(
-      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/pushes?api-version=6.0`,
-      {
-        refUpdates: [{
-          name: `refs/heads/${newBranch}`,
-          oldObjectId: latestCommitId
-        }],
-        commits: [{
-          comment: 'Mule migration: update dependencies for CloudHub 2.0',
-          changes: [{
+    // Prepare changes array for batch update
+    const changes = [];
+    
+    // Update all pom.xml files
+    if (app.pomPaths && app.pomPaths.length > 0) {
+      console.log('Processing POM files for Azure DevOps:', app.pomPaths);
+      
+      for (const pomPath of app.pomPaths) {
+        try {
+          console.log(`Fetching pom.xml: ${pomPath}`);
+          const pomRes = await axios.get(
+            `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=/${pomPath}&api-version=6.0`,
+            { 
+              headers: { 
+                Authorization: `Basic ${btoa(':' + azureToken)}`,
+                'Content-Type': 'application/json'
+              } 
+            }
+          );
+          const pomXml = pomRes.data;
+          
+          // Update POM with dependency version updates
+          const updatedPom = updatePomDependencies(pomXml, app.dependencies);
+          
+          changes.push({
             changeType: 'edit',
-            item: { path: '/pom.xml' },
+            item: { path: `/${pomPath}` },
             newContent: {
               content: updatedPom,
               contentType: 'rawtext'
             }
-          }]
-        }]
-      },
-      { 
-        headers: { 
-          Authorization: `Basic ${btoa(':' + azureToken)}`,
-          'Content-Type': 'application/json'
-        } 
+          });
+          console.log(`Added POM update to changes: ${pomPath}`);
+        } catch (error) {
+          console.error(`Failed to process ${pomPath}:`, error);
+        }
       }
-    );
+    }
+    
+    // Update all mule-artifact.json files
+    if (app.artifactJsonPaths && app.artifactJsonPaths.length > 0) {
+      console.log('Processing artifact JSON files for Azure DevOps:', app.artifactJsonPaths);
+      
+      for (const ajPath of app.artifactJsonPaths) {
+        try {
+          console.log(`Fetching mule-artifact.json: ${ajPath}`);
+          const ajRes = await axios.get(
+            `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=/${ajPath}&api-version=6.0`,
+            { 
+              headers: { 
+                Authorization: `Basic ${btoa(':' + azureToken)}`,
+                'Content-Type': 'application/json'
+              } 
+            }
+          );
+          const ajJson = JSON.parse(ajRes.data);
+          
+          // Update Java version to latest (NO migration key)
+          const latestJavaVersion = getLatestJavaVersion();
+          const updatedAj = { 
+            ...ajJson, 
+            javaSpecificationVersions: [latestJavaVersion]
+          };
+          
+          changes.push({
+            changeType: 'edit',
+            item: { path: `/${ajPath}` },
+            newContent: {
+              content: JSON.stringify(updatedAj, null, 2),
+              contentType: 'rawtext'
+            }
+          });
+          console.log(`Added artifact JSON update to changes: ${ajPath}`);
+        } catch (error) {
+          console.error(`Failed to process ${ajPath}:`, error);
+        }
+      }
+    }
+    
+    // Update all project XML files
+    if (app.projectXmlPaths && app.projectXmlPaths.length > 0) {
+      console.log('Processing project XML files for Azure DevOps:', app.projectXmlPaths);
+      
+      for (const xmlPath of app.projectXmlPaths) {
+        try {
+          console.log(`Fetching project XML: ${xmlPath}`);
+          const xmlRes = await axios.get(
+            `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=/${xmlPath}&api-version=6.0`,
+            { 
+              headers: { 
+                Authorization: `Basic ${btoa(':' + azureToken)}`,
+                'Content-Type': 'application/json'
+              } 
+            }
+          );
+          const xmlContent = xmlRes.data;
+          const updatedXml = xmlContent + '\n<!-- Updated for CloudHub 2.0 migration -->';
+          
+          changes.push({
+            changeType: 'edit',
+            item: { path: `/${xmlPath}` },
+            newContent: {
+              content: updatedXml,
+              contentType: 'rawtext'
+            }
+          });
+          console.log(`Added XML update to changes: ${xmlPath}`);
+        } catch (error) {
+          console.error(`Failed to process ${xmlPath}:`, error);
+        }
+      }
+    }
+    
+    // Push all changes to new branch if we have any changes
+    if (changes.length > 0) {
+      console.log(`Pushing ${changes.length} changes to Azure DevOps`);
+      await axios.post(
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/pushes?api-version=6.0`,
+        {
+          refUpdates: [{
+            name: `refs/heads/${newBranch}`,
+            oldObjectId: latestCommitId
+          }],
+          commits: [{
+            comment: 'Mule migration: update dependencies for CloudHub 2.0',
+            changes: changes
+          }]
+        },
+        { 
+          headers: { 
+            Authorization: `Basic ${btoa(':' + azureToken)}`,
+            'Content-Type': 'application/json'
+          } 
+        }
+      );
+      console.log('Successfully pushed all changes to Azure DevOps');
+    } else {
+      console.log('No changes to push to Azure DevOps');
+    }
+    
+    console.log('Azure DevOps migration completed for app:', app.applicationName);
   };
 
   const handleMigrateSelected = async () => {

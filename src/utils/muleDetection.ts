@@ -374,7 +374,7 @@ const getCloudHub2Alternative = (namespace: string): string | undefined => {
   return alternatives[namespace];
 };
 
-export const getLatestMuleVersion = () => '4.9';
+export const getLatestMuleVersion = () => '4.9.0';
 export const getLatestJavaVersion = () => '17';
 
 export const extractAzureOrganization = (url: string): string => {
