@@ -1,4 +1,3 @@
-
 interface MuleDependency {
   groupId: string;
   artifactId: string;
@@ -63,47 +62,46 @@ export const isMuleApplication = (pomXml: string): boolean => {
   return isMatch;
 };
 
-export const extractMuleInfo = (pomXml: string) => {
+export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
   console.log('Extracting Mule information...');
-  
-  // Enhanced Mule version extraction
-  const muleVersionPatterns = [
-    /<mule\.version>(.*?)<\/mule\.version>/,
-    /<app\.runtime>(.*?)<\/app\.runtime>/,
-    /<version>(4\.\d+\.\d+)<\/version>[\s\S]*?<groupId>org\.mule/,
-    /<version>(3\.\d+\.\d+)<\/version>[\s\S]*?<groupId>org\.mule/,
-    /<mule\.maven\.plugin\.version>(.*?)<\/mule\.maven\.plugin\.version>/
-  ];
-  
+
+  // Application name: get the first <name> tag that is a direct child of <project>
+  let applicationName = 'Unknown';
+  const nameMatch = pomXml.match(/<project[\s\S]*?<name>(.*?)<\/name>/);
+  if (nameMatch && nameMatch[1]) {
+    applicationName = nameMatch[1].trim();
+  }
+
+  // Mule runtime
+  let muleRuntime = 'Unknown';
+  const runtimeMatch = pomXml.match(/<app\.runtime>(.*?)<\/app\.runtime>/);
+  if (runtimeMatch && runtimeMatch[1]) {
+    muleRuntime = runtimeMatch[1];
+  }
+
+  // Mule version (plugin version)
   let muleVersion = 'Unknown';
-  for (const pattern of muleVersionPatterns) {
-    const match = pomXml.match(pattern);
-    if (match && match[1]) {
-      muleVersion = match[1];
-      console.log(`Found Mule version: ${muleVersion}`);
-      break;
-    }
+  const muleVersionMatch = pomXml.match(/<mule\.maven\.plugin\.version>(.*?)<\/mule\.maven\.plugin\.version>/);
+  if (muleVersionMatch && muleVersionMatch[1]) {
+    muleVersion = muleVersionMatch[1];
   }
 
-  // Enhanced Java version extraction
-  const javaVersionPatterns = [
-    /<java\.version>(.*?)<\/java\.version>/,
-    /<maven\.compiler\.source>(.*?)<\/maven\.compiler\.source>/,
-    /<maven\.compiler\.target>(.*?)<\/maven\.compiler\.target>/,
-    /<maven\.compiler\.release>(.*?)<\/maven\.compiler\.release>/
-  ];
-  
+  // Java version from artifactJson (prefer javaSpecificationVersions[0])
   let javaVersion = 'Unknown';
-  for (const pattern of javaVersionPatterns) {
-    const match = pomXml.match(pattern);
-    if (match && match[1]) {
-      javaVersion = match[1];
-      console.log(`Found Java version: ${javaVersion}`);
-      break;
+  if (artifactJson && Array.isArray(artifactJson['javaSpecificationVersions']) && artifactJson['javaSpecificationVersions'].length > 0) {
+    javaVersion = artifactJson['javaSpecificationVersions'][0];
+  } else if (artifactJson) {
+    if (artifactJson['javaversion']) javaVersion = artifactJson['javaversion'];
+    else if (artifactJson['javaVersion']) javaVersion = artifactJson['javaVersion'];
+    else {
+      // Try case-insensitive
+      for (const key of Object.keys(artifactJson)) {
+        if (key.toLowerCase() === 'javaversion') javaVersion = artifactJson[key];
+      }
     }
   }
 
-  // Enhanced dependency extraction with deprecation checking
+  // Dependencies (as before)
   const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
   const dependencies = depMatches
     .map(match => {
@@ -111,7 +109,6 @@ export const extractMuleInfo = (pomXml: string) => {
       const groupId = (depXml.match(/<groupId>(.*?)<\/groupId>/) || [])[1] || '';
       const artifactId = (depXml.match(/<artifactId>(.*?)<\/artifactId>/) || [])[1] || '';
       const version = (depXml.match(/<version>(.*?)<\/version>/) || [])[1] || '';
-      
       return { groupId, artifactId, version };
     })
     .filter(dep => 
@@ -124,7 +121,6 @@ export const extractMuleInfo = (pomXml: string) => {
       const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
       const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
       const latestVersion = getLatestVersion(dep.groupId, dep.artifactId, dep.version);
-      
       return {
         groupId: dep.groupId,
         artifactId: dep.artifactId,
@@ -135,43 +131,44 @@ export const extractMuleInfo = (pomXml: string) => {
       };
     });
 
-  console.log(`Found ${dependencies.length} Mule dependencies`);
-  return { muleVersion, javaVersion, dependencies };
+  return { applicationName, muleRuntime, muleVersion, javaVersion, dependencies };
 };
 
 export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[] => {
-  console.log('Analyzing Mule configuration for deprecated connectors...');
-  
   const connectors: MuleConnector[] = [];
-  
-  // Extract namespaces and connectors from mule-configuration.xml
+  // Only extract connectors from namespaces and flows, not from mule-configuration.xml
   const namespaceMatches = [...muleConfigXml.matchAll(/xmlns:(\w+)="([^"]+)"/g)];
-  
   namespaceMatches.forEach(match => {
     const prefix = match[1];
     const namespace = match[2];
-    
-    // Check if namespace indicates a deprecated connector
-    const isDeprecated = isDeprecatedConnector(namespace);
-    const alternative = getCloudHub2Alternative(namespace);
-    
+    let isDeprecated = isDeprecatedConnector(namespace);
+    let cloudHub2Alternative = getCloudHub2Alternative(namespace);
+    if (namespace.includes('cloudhub')) {
+      isDeprecated = true;
+      cloudHub2Alternative = 'Not available in CloudHub 2.0';
+    }
     if (namespace.includes('mule') || namespace.includes('connector')) {
       connectors.push({
         name: prefix,
         namespace,
         isDeprecated,
-        cloudHub2Alternative: alternative
+        cloudHub2Alternative
       });
     }
   });
-  
+  // Look for VM connector with persistence
+  if (/persistent\s*=\s*['"]?true['"]?/i.test(muleConfigXml) && /<vm:/i.test(muleConfigXml)) {
+    connectors.push({
+      name: 'Persistent VM Queue',
+      namespace: 'vm',
+      isDeprecated: true,
+      cloudHub2Alternative: 'Replace with Logger connector (CloudHub 2.0)'
+    });
+  }
   // Also look for specific connector usage in flows
   const flowMatches = [...muleConfigXml.matchAll(/<flow[\s\S]*?<\/flow>/g)];
-  
   flowMatches.forEach(flowMatch => {
     const flowXml = flowMatch[0];
-    
-    // Check for deprecated connector patterns
     const deprecatedPatterns = [
       /<vm:/g,
       /<jms:/g,
@@ -184,7 +181,6 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
       /<tcp:/g,
       /<udp:/g
     ];
-    
     deprecatedPatterns.forEach(pattern => {
       if (pattern.test(flowXml)) {
         const connectorName = pattern.source.replace(/<|>/g, '').replace(':', '');
@@ -199,8 +195,6 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
       }
     });
   });
-  
-  console.log(`Found ${connectors.length} connectors, ${connectors.filter(c => c.isDeprecated).length} deprecated`);
   return connectors;
 };
 
@@ -234,21 +228,62 @@ const getReplacementDependency = (groupId: string, artifactId: string): string |
   return replacements[artifactId];
 };
 
+const latestConnectorVersions: Record<string, string> = {
+  'mule-marketo-connector': '3.0.9',
+  'mule-oauth-module': '1.1.21',
+  'mule-amazon-ec2-connector': '2.5.8',
+  'mule-amazon-s3-connector': '7.0.5',
+  'mule-amazon-sns-connector': '4.7.11',
+  'mule-amazon-sqs-connector': '5.11.15',
+  'mule-amqp-connector': '1.8.2',
+  'anypoint-mq-connector': '4.0.12',
+  'mule-cassandradb-connector': '4.1.3',
+  'mule-kafka-connector': '4.10.1',
+  'mule-azure-service-bus-connector': '3.4.1',
+  'mule-box-connector': '5.3.0',
+  'mule-file-connector': '1.5.3',
+  'mule-db-connector': '1.14.14',
+  'mule-cloudhub-connector': '1.2.0',
+  'mule-http-connector': '1.10.3',
+  'mule-ftp-connector': '2.0.0',
+  'mule-email-connector': '1.7.5',
+  'mule-microsoft-dotnet-connector': '3.1.8',
+  'mule-jms-connector': '1.10.1',
+  'mule-ldap-connector': '3.6.0',
+  'mule-microsoft-dynamics-gp-connector': '2.1.7',
+  'mule-microsoft-dynamics-crm-connector': '3.2.15',
+  'mule-microsoft-service-bus-connector': '2.2.7',
+  'mule-objectstore-connector': '1.2.2',
+  'mule-module-file-extension-common': '1.4.3',
+  'mule-powershell-connector': '2.1.3',
+  'mule-mongodb-connector': '6.3.10',
+  'mule-hdfs-connector': '6.0.26',
+  'mule-sharepoint-connector': '3.7.0',
+  'mule-neo4j-connector': '3.0.7',
+  'mule-peoplesoft-connector': '3.1.9',
+  'mule-oracle-ebs-122-connector': '2.3.1',
+  'mule-netsuite-openair-connector': '2.0.12',
+  'mule-netsuite-connector': '11.10.0',
+  'mule-redis-connector': '5.4.6',
+  'mule-salesforce-composite-connector': '2.18.1',
+  'mule-salesforce-connector': '11.1.0',
+  'mule-rosettanet-connector': '2.1.0',
+  'mule-sfdc-analytics-connector': '3.17.0',
+  'mule-sfdc-marketing-cloud-connector': '4.1.4',
+  'mule-sap-concur-connector': '4.2.3',
+  'mule-sftp-connector': '2.4.4',
+  'mule-sap-connector': '5.9.12',
+  'mule-servicenow-connector': '6.17.1',
+  'mule-wsc-connector': '1.11.1',
+  'mule-workday-connector': '16.3.0',
+  'mule-zuora-connector': '6.0.11',
+  'mule-twilio-connector': '4.2.9',
+  'mule-sockets-connector': '1.2.5',
+  'mule-xml-module': '1.4.2',
+};
+
 const getLatestVersion = (groupId: string, artifactId: string, currentVersion: string): string => {
-  // This would normally make an API call to Maven Central
-  // For now, return simulated latest versions
-  const latestVersions: Record<string, string> = {
-    'mule-vm-connector': '2.0.1',
-    'mule-jms-connector': '1.8.2',
-    'mule-file-connector': '1.5.1',
-    'mule-ftp-connector': '1.8.1',
-    'mule-sftp-connector': '1.5.2',
-    'mule-email-connector': '1.4.1',
-    'mule-xml-module': '1.3.2',
-    'mule-json-module': '2.3.1'
-  };
-  
-  return latestVersions[artifactId] || currentVersion;
+  return latestConnectorVersions[artifactId] || currentVersion;
 };
 
 const isDeprecatedConnector = (namespace: string): boolean => {
@@ -281,3 +316,6 @@ const getCloudHub2Alternative = (namespace: string): string | undefined => {
   
   return alternatives[namespace];
 };
+
+export const getLatestMuleVersion = () => '4.9';
+export const getLatestJavaVersion = () => '17';

@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -8,6 +7,9 @@ import { CheckCircle2, AlertTriangle, XCircle, ExternalLink } from 'lucide-react
 import { toast } from 'sonner';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import axios from 'axios';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogClose } from '@/components/ui/dialog';
+import { useState } from 'react';
+import { getLatestMuleVersion, getLatestJavaVersion } from '@/utils/muleDetection';
 
 interface MuleDependency {
   groupId: string;
@@ -37,6 +39,9 @@ interface MuleApplication {
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   lastUpdated: string;
   selected?: boolean;
+  applicationName: string;
+  muleRuntime: string;
+  artifactJson?: Record<string, any>;
 }
 
 interface RepositoryListProps {
@@ -47,6 +52,7 @@ interface RepositoryListProps {
 const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplications }) => {
   const { selectedOrganization } = useOrganizations();
   const [migrating, setMigrating] = React.useState(false);
+  const [selectedApp, setSelectedApp] = useState<MuleApplication | null>(null);
 
   const githubToken = selectedOrganization?.github_token || '';
 
@@ -161,31 +167,35 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[50px]">Select</TableHead>
-                <TableHead>Application</TableHead>
-                <TableHead>Versions</TableHead>
-                <TableHead>Dependencies</TableHead>
-                <TableHead>Connectors</TableHead>
-                <TableHead>Migration Status</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {applications.map((app) => (
-                <TableRow key={app.id}>
-                  <TableCell>
-                    <input
-                      type="checkbox"
-                      checked={!!app.selected}
-                      onChange={() => toggleApplicationSelection(app.id)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <div>
-                      <div className="font-medium">{app.name}</div>
+          <div className="overflow-x-auto">
+            <Table className="min-w-[1400px] border border-gray-300 border-collapse">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[50px] border border-gray-300">Select</TableHead>
+                  <TableHead className="border border-gray-300">Application Name</TableHead>
+                  <TableHead className="border border-gray-300">Repository</TableHead>
+                  <TableHead className="border border-gray-300">Mule Runtime</TableHead>
+                  <TableHead className="border border-gray-300">Java Version</TableHead>
+                  <TableHead className="border border-gray-300">Dependencies</TableHead>
+                  <TableHead className="border border-gray-300">Connectors</TableHead>
+                  <TableHead className="border border-gray-300">CloudHub 2.0 Compatibility</TableHead>
+                  <TableHead className="border border-gray-300">Latest Version</TableHead>
+                  <TableHead className="border border-gray-300">Migration Status</TableHead>
+                  <TableHead className="border border-gray-300">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {applications.map((app) => (
+                  <TableRow key={app.id}>
+                    <TableCell className="border border-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={!!app.selected}
+                        onChange={() => toggleApplicationSelection(app.id)}
+                      />
+                    </TableCell>
+                    <TableCell className="border border-gray-300">{app.applicationName}</TableCell>
+                    <TableCell className="border border-gray-300">
                       <a 
                         href={app.repository} 
                         target="_blank" 
@@ -195,76 +205,92 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
                         {app.repository.split('/').slice(-2).join('/')}
                         <ExternalLink className="h-3 w-3 ml-1" />
                       </a>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="space-y-1">
-                      <Badge variant="outline" className="text-xs">
-                        Mule {app.muleVersion}
-                      </Badge>
-                      <Badge variant="outline" className="text-xs">
-                        Java {app.javaVersion}
-                      </Badge>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="space-y-1">
-                      <div className="text-sm text-gray-600">
-                        {app.dependencies.length} total
+                    </TableCell>
+                    <TableCell className="border border-gray-300">
+                      {app.muleRuntime}
+                      <div className="text-xs text-gray-500">Latest: {getLatestMuleVersion()}</div>
+                    </TableCell>
+                    <TableCell className="border border-gray-300">
+                      {app.javaVersion}
+                      <div className="text-xs text-gray-500">Latest: {getLatestJavaVersion()}</div>
+                    </TableCell>
+                    <TableCell className="border border-gray-300">
+                      <div className="space-y-1">
+                        {app.dependencies.map(dep => (
+                          <div key={dep.artifactId} className="flex items-center space-x-2">
+                            <span>{dep.artifactId}</span>
+                            <Badge variant="outline" className="text-xs">{dep.version}</Badge>
+                            {dep.version !== dep.latestVersion && (
+                              <Badge variant="outline" className="text-yellow-600 text-xs">→ {dep.latestVersion}</Badge>
+                            )}
+                            {dep.isDeprecated && (
+                              <Badge variant="destructive" className="text-xs">Deprecated</Badge>
+                            )}
+                            {dep.replacement && (
+                              <Badge variant="secondary" className="text-xs">Replace: {dep.replacement}</Badge>
+                            )}
+                          </div>
+                        ))}
                       </div>
-                      {app.dependencies.filter(dep => dep.isDeprecated).length > 0 && (
-                        <Badge variant="destructive" className="text-xs">
-                          {app.dependencies.filter(dep => dep.isDeprecated).length} deprecated
-                        </Badge>
-                      )}
-                      {app.dependencies.filter(dep => dep.version !== dep.latestVersion).length > 0 && (
-                        <Badge variant="outline" className="text-yellow-600 text-xs">
-                          {app.dependencies.filter(dep => dep.version !== dep.latestVersion).length} updates available
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="space-y-1">
-                      <div className="text-sm text-gray-600">
-                        {app.connectors.length} connectors
+                    </TableCell>
+                    <TableCell className="border border-gray-300">
+                      <div className="space-y-1">
+                        {app.connectors.map(conn => (
+                          <div key={conn.name} className="flex items-center space-x-2">
+                            <span>{conn.name}</span>
+                            {conn.isDeprecated && (
+                              <Badge variant="destructive" className="text-xs">Deprecated</Badge>
+                            )}
+                            {conn.cloudHub2Alternative && (
+                              <Badge variant="outline" className="text-blue-600 text-xs">{conn.cloudHub2Alternative}</Badge>
+                            )}
+                          </div>
+                        ))}
                       </div>
-                      {app.connectors.filter(conn => conn.isDeprecated).length > 0 && (
-                        <Badge variant="destructive" className="text-xs">
-                          {app.connectors.filter(conn => conn.isDeprecated).length} deprecated
-                        </Badge>
+                    </TableCell>
+                    <TableCell className="border border-gray-300">
+                      {app.connectors.filter(conn => conn.cloudHub2Alternative).length > 0 ? (
+                        <span className="text-red-600 text-xs">Some connectors not available in CloudHub 2.0</span>
+                      ) : (
+                        <span className="text-green-600 text-xs">All compatible</span>
                       )}
-                      {app.connectors.filter(conn => conn.cloudHub2Alternative).length > 0 && (
-                        <Badge variant="outline" className="text-blue-600 text-xs">
-                          CloudHub 2.0 alternatives available
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center space-x-2">
-                      {getStatusIcon(app.status)}
-                      <div className="flex flex-col">
-                        <span className={getStatusColor(app.status)}>
-                          {app.status.replace('_', ' ')}
-                        </span>
-                        {getTotalDeprecatedItems(app) > 0 && (
-                          <span className="text-xs text-red-600">
-                            {getTotalDeprecatedItems(app)} items need attention
+                    </TableCell>
+                    <TableCell className="border border-gray-300">
+                      <div className="space-y-1">
+                        <div className="text-xs">Mule: {getLatestMuleVersion()}</div>
+                        <div className="text-xs">Java: {getLatestJavaVersion()}</div>
+                        {app.dependencies.map(dep => (
+                          <div key={dep.artifactId} className="text-xs">
+                            {dep.artifactId}: {dep.latestVersion}
+                          </div>
+                        ))}
+                      </div>
+                    </TableCell>
+                    <TableCell className="border border-gray-300">
+                      <div className="flex items-center space-x-2">
+                        {getStatusIcon(app.status)}
+                        <div className="flex flex-col">
+                          <span className={getStatusColor(app.status)}>
+                            {app.status.replace('_', ' ')}
                           </span>
-                        )}
+                          {getTotalDeprecatedItems(app) > 0 && (
+                            <span className="text-xs text-red-600">
+                              {getTotalDeprecatedItems(app)} items need attention
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Button variant="outline" size="sm">
-                      View Details
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                    </TableCell>
+                    <TableCell className="border border-gray-300">
+                      <Button variant="outline" size="sm" onClick={() => setSelectedApp(app)}>
+                        View Details
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </CardContent>
       </Card>
       
@@ -277,6 +303,58 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           {migrating ? 'Migrating...' : 'Migrate Selected Applications'}
         </Button>
       </div>
+
+      {/* Dialog for View Details */}
+      <Dialog open={!!selectedApp} onOpenChange={open => !open && setSelectedApp(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{selectedApp?.applicationName || selectedApp?.name}</DialogTitle>
+            <DialogDescription>Mule Application Details</DialogDescription>
+          </DialogHeader>
+          {selectedApp && (
+            <div className="space-y-2">
+              <div><b>Repository:</b> {selectedApp.repository}</div>
+              <div><b>Mule Runtime:</b> {selectedApp.muleRuntime}</div>
+              <div><b>Mule Version:</b> {selectedApp.muleVersion}</div>
+              <div><b>Java Version:</b> {selectedApp.javaVersion}</div>
+              <div><b>Dependencies:</b>
+                <ul className="ml-4 list-disc">
+                  {selectedApp.dependencies.map(dep => (
+                    <li key={dep.artifactId}>
+                      {dep.artifactId} ({dep.version})
+                      {dep.version !== dep.latestVersion && <> → <b>{dep.latestVersion}</b></>}
+                      {dep.isDeprecated && <span className="text-red-600 ml-1">Deprecated</span>}
+                      {dep.replacement && <span className="ml-1">(Replace with {dep.replacement})</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div><b>Connectors:</b>
+                <ul className="ml-4 list-disc">
+                  {selectedApp.connectors.map(conn => (
+                    <li key={conn.name}>
+                      {conn.name} {conn.isDeprecated && <span className="text-red-600 ml-1">Deprecated</span>}
+                      {conn.cloudHub2Alternative && <span className="ml-1">(CloudHub 2.0: {conn.cloudHub2Alternative})</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              {selectedApp.artifactJson && (
+                <div><b>Artifact JSON:</b>
+                  <ul className="ml-4 list-disc">
+                    {Object.entries(selectedApp.artifactJson).map(([key, value]) => (
+                      <li key={key}>{key}: {String(value)}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogClose asChild>
+            <Button>Close</Button>
+          </DialogClose>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

@@ -96,105 +96,112 @@ const Dashboard = () => {
     return null;
   };
 
+  // Utility: Recursively list all files in a repo
+  const listAllFiles = async (repoFullName: string, path: string, token: string): Promise<string[]> => {
+    let files: string[] = [];
+    try {
+      const res = await axios.get(
+        `https://api.github.com/repos/${repoFullName}/contents/${path}`,
+        { headers: { Authorization: `token ${token}` } }
+      );
+      for (const item of res.data) {
+        if (item.type === 'file') {
+          files.push(item.path);
+        } else if (item.type === 'dir') {
+          const subFiles = await listAllFiles(repoFullName, item.path, token);
+          files = files.concat(subFiles);
+        }
+      }
+    } catch (e) {}
+    return files;
+  };
+
   const handleScanRepositories = async () => {
     const token = selectedOrganization?.github_token || githubToken.trim();
     if (!token) {
       toast.error('Please connect GitHub and provide a token first.');
       return;
     }
-    
     setFetchingRepos(true);
     setApplications([]);
-    
+
     try {
-      console.log('Starting comprehensive repository scan...');
-      
-      // Fetch repositories with pagination
       const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
       let allRepos = [];
       let page = 1;
       const perPage = 100;
-      
       while (true) {
         const url = orgName
           ? `https://api.github.com/orgs/${orgName}/repos?per_page=${perPage}&page=${page}`
           : `https://api.github.com/user/repos?per_page=${perPage}&page=${page}`;
-        
-        console.log(`Fetching repositories page ${page}...`);
         const reposRes = await axios.get(url, {
           headers: { Authorization: `token ${token}` }
         });
-        
         if (reposRes.data.length === 0) break;
         allRepos.push(...reposRes.data);
         page++;
-        
-        if (page > 10) break; // Safety limit
+        if (page > 10) break;
       }
-      
-      console.log(`Found ${allRepos.length} total repositories`);
-      
-      // Analyze each repository comprehensively
-      const muleApps: MuleApplication[] = [];
-      
+
+      const muleApps: any[] = [];
       for (const repo of allRepos) {
         try {
-          console.log(`\n=== Analyzing repository: ${repo.name} ===`);
-          
-          // Fetch pom.xml
-          const pomXml = await fetchFileContent(repo.full_name, 'pom.xml', token);
-          
-          if (pomXml && isMuleApplication(pomXml)) {
-            console.log(`✅ Confirmed Mule application: ${repo.name}`);
-            
-            // Extract basic Mule info from pom.xml
-            const { muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
-            
-            // Try to fetch mule-configuration.xml from common locations
+          // Recursively list all files in the repo
+          const allFiles = await listAllFiles(repo.full_name, '', token);
+          const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
+          for (const pomPath of pomFiles) {
+            const pomXml = await fetchFileContent(repo.full_name, pomPath, token);
+            if (!pomXml || !isMuleApplication(pomXml)) continue;
+            // Extract Mule info
+            const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+            // Try to find connectors from config files (relative to pom.xml location)
+            let connectors: any[] = [];
+            const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
             const configPaths = [
-              'src/main/mule/mule-configuration.xml',
-              'src/main/app/mule-configuration.xml',
-              'src/main/resources/mule-configuration.xml',
-              'mule-configuration.xml'
+              `${pomDir}/src/main/mule/mule-configuration.xml`,
+              `${pomDir}/src/main/app/mule-configuration.xml`,
+              `${pomDir}/src/main/resources/mule-configuration.xml`,
+              `${pomDir}/mule-configuration.xml`
             ];
-            
-            let connectors: MuleConnector[] = [];
-            
             for (const configPath of configPaths) {
               const configXml = await fetchFileContent(repo.full_name, configPath, token);
               if (configXml) {
-                console.log(`Found Mule configuration at: ${configPath}`);
                 connectors = analyzeMuleConfiguration(configXml);
                 break;
               }
             }
-            
-            // If no specific config file, try to find any .xml files in src/main/mule
+            // If no connectors, try all .xml in src/main/mule (relative to pom.xml)
             if (connectors.length === 0) {
               try {
+                const muleDirPath = `${pomDir}/src/main/mule`;
                 const muleDir = await axios.get(
-                  `https://api.github.com/repos/${repo.full_name}/contents/src/main/mule`,
+                  `https://api.github.com/repos/${repo.full_name}/contents/${muleDirPath}`,
                   { headers: { Authorization: `token ${token}` } }
                 );
-                
                 if (muleDir.data && Array.isArray(muleDir.data)) {
                   for (const file of muleDir.data) {
                     if (file.name.endsWith('.xml')) {
                       const xmlContent = await fetchFileContent(repo.full_name, file.path, token);
                       if (xmlContent) {
-                        const fileConnectors = analyzeMuleConfiguration(xmlContent);
-                        connectors = [...connectors, ...fileConnectors];
+                        connectors = [...connectors, ...analyzeMuleConfiguration(xmlContent)];
                       }
                     }
                   }
                 }
-              } catch (e) {
-                console.log(`No src/main/mule directory found in ${repo.name}`);
-              }
+              } catch {}
             }
-            
+            // Try to fetch artifact.json for extra info (optional, relative to pom.xml)
+            let artifactJson = null;
+            try {
+              const artifactPath1 = `${pomDir}/mule-artifact.json`;
+              const artifactPath2 = `${pomDir}/src/main/resources/mule-artifact.json`;
+              const artifactContent = await fetchFileContent(repo.full_name, artifactPath1, token) ||
+                await fetchFileContent(repo.full_name, artifactPath2, token);
+              if (artifactContent) artifactJson = JSON.parse(artifactContent);
+            } catch {}
+            // Add to Mule apps
             muleApps.push({
-              id: repo.id.toString(),
+              id: `${repo.id}-${pomPath}`,
               name: repo.name,
               repository: repo.html_url,
               branch: repo.default_branch,
@@ -202,30 +209,23 @@ const Dashboard = () => {
               javaVersion,
               dependencies,
               connectors,
+              artifactJson,
               status: 'pending',
               lastUpdated: repo.updated_at
             });
-            
-            console.log(`Added Mule app: ${repo.name} (Mule ${muleVersion}, Java ${javaVersion}, ${dependencies.length} deps, ${connectors.length} connectors)`);
-          } else {
-            console.log(`❌ Not a Mule application: ${repo.name}`);
           }
         } catch (error) {
-          console.log(`Error analyzing ${repo.name}:`, error);
+          // skip repo on error
         }
       }
-      
-      console.log(`\n🎯 SCAN COMPLETE: Found ${muleApps.length} Mule applications`);
       setApplications(muleApps);
       setShowRepositories(true);
-      
       if (muleApps.length > 0) {
         toast.success(`Found ${muleApps.length} Mule application(s) with comprehensive analysis!`);
       } else {
         toast.info('No Mule applications found in your repositories.');
       }
     } catch (err) {
-      console.error('Repository scan error:', err);
       toast.error('Failed to fetch repositories. Please check your token and permissions.');
     } finally {
       setFetchingRepos(false);

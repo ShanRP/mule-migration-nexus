@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,6 +9,7 @@ import { Github, RefreshCw, GitBranch, CheckCircle2, AlertTriangle, XCircle } fr
 import { toast } from 'sonner';
 import axios from 'axios';
 import { useOrganizations } from '@/providers/OrganizationProvider';
+import { isMuleApplication, extractMuleInfo, analyzeMuleConfiguration, getLatestMuleVersion, getLatestJavaVersion } from '@/utils/muleDetection';
 
 interface MuleDependency {
   groupId: string;
@@ -28,9 +28,12 @@ interface MuleApplication {
   muleVersion: string;
   javaVersion: string;
   dependencies: MuleDependency[];
+  connectors: any[];
+  artifactJson: any;
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   lastUpdated: string;
   selected?: boolean;
+  applicationName: string;
 }
 
 const Migration = () => {
@@ -43,83 +46,43 @@ const Migration = () => {
 
   const githubToken = selectedOrganization?.github_token || localStorage.getItem('MULE_githubToken') || '';
 
-  const isMuleApplication = (pomXml: string): boolean => {
-    // Check for Mule-specific indicators in pom.xml
-    const muleIndicators = [
-      /<groupId>org\.mule\./,
-      /<artifactId>mule-/,
-      /<mule\.version>/,
-      /<packaging>mule-application<\/packaging>/,
-      /<packaging>mule<\/packaging>/,
-      /<plugin>[\s\S]*?<groupId>org\.mule\.tools\.maven<\/groupId>/,
-      /<dependency>[\s\S]*?<groupId>org\.mule\.connectors<\/groupId>/,
-      /<dependency>[\s\S]*?<groupId>org\.mule\.modules<\/groupId>/
-    ];
-
-    return muleIndicators.some(regex => regex.test(pomXml));
+  // Utility to fetch file content from GitHub
+  const fetchFileContent = async (repoFullName: string, filePath: string, token: string): Promise<string | null> => {
+    try {
+      const response = await axios.get(
+        `https://api.github.com/repos/${repoFullName}/contents/${filePath}`,
+        { headers: { Authorization: `token ${token}` } }
+      );
+      if (response.data && response.data.content) {
+        return atob(response.data.content.replace(/\n/g, ''));
+      }
+    } catch (error) {
+      // File not found or access denied
+    }
+    return null;
   };
 
-  const extractMuleInfo = (pomXml: string) => {
-    // Extract Mule version with multiple patterns
-    const muleVersionPatterns = [
-      /<mule\.version>(.*?)<\/mule\.version>/,
-      /<version>(4\.\d+\.\d+)<\/version>[\s\S]*?<groupId>org\.mule/,
-      /<version>(3\.\d+\.\d+)<\/version>[\s\S]*?<groupId>org\.mule/
-    ];
-    
-    let muleVersion = 'Unknown';
-    for (const pattern of muleVersionPatterns) {
-      const match = pomXml.match(pattern);
-      if (match && match[1]) {
-        muleVersion = match[1];
-        break;
+  // Utility: Recursively list all files in a repo
+  const listAllFiles = async (repoFullName: string, path: string, token: string): Promise<string[]> => {
+    let files: string[] = [];
+    try {
+      const res = await axios.get(
+        `https://api.github.com/repos/${repoFullName}/contents/${path}`,
+        { headers: { Authorization: `token ${token}` } }
+      );
+      for (const item of res.data) {
+        if (item.type === 'file') {
+          files.push(item.path);
+        } else if (item.type === 'dir') {
+          const subFiles = await listAllFiles(repoFullName, item.path, token);
+          files = files.concat(subFiles);
+        }
       }
-    }
-
-    // Extract Java version
-    const javaVersionPatterns = [
-      /<java\.version>(.*?)<\/java\.version>/,
-      /<maven\.compiler\.source>(.*?)<\/maven\.compiler\.source>/,
-      /<maven\.compiler\.target>(.*?)<\/maven\.compiler\.target>/
-    ];
-    
-    let javaVersion = 'Unknown';
-    for (const pattern of javaVersionPatterns) {
-      const match = pomXml.match(pattern);
-      if (match && match[1]) {
-        javaVersion = match[1];
-        break;
-      }
-    }
-
-    // Extract Mule-specific dependencies
-    const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
-    const dependencies = depMatches
-      .map(match => {
-        const depXml = match[1];
-        const groupId = (depXml.match(/<groupId>(.*?)<\/groupId>/) || [])[1] || '';
-        const artifactId = (depXml.match(/<artifactId>(.*?)<\/artifactId>/) || [])[1] || '';
-        const version = (depXml.match(/<version>(.*?)<\/version>/) || [])[1] || '';
-        
-        return { groupId, artifactId, version };
-      })
-      .filter(dep => 
-        dep.groupId.includes('mule') || 
-        dep.artifactId.includes('mule') ||
-        dep.groupId.includes('org.mule')
-      )
-      .map(dep => ({
-        groupId: dep.groupId,
-        artifactId: dep.artifactId,
-        version: dep.version,
-        latestVersion: dep.version,
-        isDeprecated: false
-      }));
-
-    return { muleVersion, javaVersion, dependencies };
+    } catch (e) {}
+    return files;
   };
 
-  // Fetch all repos and scan for Mule apps
+  // Fetch all repos and scan for Mule apps (robust)
   const handleFetchRepositories = async () => {
     if (!githubToken) {
       toast.error('Please connect GitHub and provide a token in the Dashboard.');
@@ -128,87 +91,91 @@ const Migration = () => {
     setFetchingRepos(true);
     setError(null);
     setApplications([]);
-    
+
     try {
-      console.log('Starting repository scan from Migration...');
-      
-      // Fetch user/org repos with pagination
       const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
       let allRepos = [];
       let page = 1;
       const perPage = 100;
-      
       while (true) {
         const url = orgName
           ? `https://api.github.com/orgs/${orgName}/repos?per_page=${perPage}&page=${page}`
           : `https://api.github.com/user/repos?per_page=${perPage}&page=${page}`;
-        
-        console.log(`Fetching repositories page ${page}...`);
         const reposRes = await axios.get(url, {
           headers: { Authorization: `token ${githubToken}` }
         });
-        
         if (reposRes.data.length === 0) break;
         allRepos.push(...reposRes.data);
         page++;
-        
-        // Limit to prevent excessive API calls (adjust as needed)
         if (page > 10) break;
       }
-      
-      console.log(`Found ${allRepos.length} total repositories`);
-      
-      // Check each repo for Mule applications
-      const muleApps: MuleApplication[] = [];
+
+      const muleApps: any[] = [];
       for (const repo of allRepos) {
         try {
-          console.log(`Checking repository: ${repo.name}`);
-          const pomRes = await axios.get(
-            `https://api.github.com/repos/${repo.full_name}/contents/pom.xml`,
-            { headers: { Authorization: `token ${githubToken}` } }
-          );
-          
-          if (pomRes.data && pomRes.data.content) {
-            // Decode base64 pom.xml
-            const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
-            
-            // Check if it's actually a Mule application
-            if (isMuleApplication(pomXml)) {
-              console.log(`✓ Found Mule application: ${repo.name}`);
-              
-              const { muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
-              
-              muleApps.push({
-                id: repo.id,
-                name: repo.name,
-                repository: repo.html_url,
-                branch: repo.default_branch,
-                muleVersion,
-                javaVersion,
-                dependencies,
-                status: 'pending',
-                lastUpdated: repo.updated_at
-              });
-            } else {
-              console.log(`✗ Not a Mule application: ${repo.name}`);
-            }
+          // Recursively list all files in the repo
+          const allFiles = await listAllFiles(repo.full_name, '', githubToken);
+          const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
+          for (const pomPath of pomFiles) {
+            const pomXml = await fetchFileContent(repo.full_name, pomPath, githubToken);
+            if (!pomXml || !isMuleApplication(pomXml)) continue;
+            // Extract Mule info
+            const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+            // If no connectors, try all .xml in src/main/mule (relative to pom.xml)
+            let connectors: any[] = [];
+            try {
+              const muleDirPath = `${pomPath.substring(0, pomPath.lastIndexOf('/'))}/src/main/mule`;
+              const muleDir = await axios.get(
+                `https://api.github.com/repos/${repo.full_name}/contents/${muleDirPath}`,
+                { headers: { Authorization: `token ${githubToken}` } }
+              );
+              if (muleDir.data && Array.isArray(muleDir.data)) {
+                for (const file of muleDir.data) {
+                  if (file.name.endsWith('.xml')) {
+                    const xmlContent = await fetchFileContent(repo.full_name, file.path, githubToken);
+                    if (xmlContent) {
+                      connectors = [...connectors, ...analyzeMuleConfiguration(xmlContent)];
+                    }
+                  }
+                }
+              }
+            } catch {}
+            // Try to fetch artifact.json for extra info (optional, relative to pom.xml)
+            let artifactJson = null;
+            try {
+              const artifactPath1 = `${pomPath.substring(0, pomPath.lastIndexOf('/'))}/mule-artifact.json`;
+              const artifactPath2 = `${pomPath.substring(0, pomPath.lastIndexOf('/'))}/src/main/resources/mule-artifact.json`;
+              const artifactContent = await fetchFileContent(repo.full_name, artifactPath1, githubToken) ||
+                await fetchFileContent(repo.full_name, artifactPath2, githubToken);
+              if (artifactContent) artifactJson = JSON.parse(artifactContent);
+            } catch {}
+            // Add to Mule apps
+            muleApps.push({
+              id: `${repo.id}-${pomPath}`,
+              name: repo.name,
+              repository: repo.html_url,
+              branch: repo.default_branch,
+              muleVersion,
+              javaVersion,
+              dependencies,
+              connectors,
+              artifactJson,
+              status: 'pending',
+              lastUpdated: repo.updated_at,
+              applicationName,
+            });
           }
-        } catch (e) {
-          // No pom.xml or access denied, skip silently
-          console.log(`No pom.xml found in ${repo.name}`);
+        } catch (error) {
+          // skip repo on error
         }
       }
-      
-      console.log(`Found ${muleApps.length} Mule applications`);
       setApplications(muleApps);
-      
       if (muleApps.length > 0) {
         toast.success(`Found ${muleApps.length} Mule application(s)!`);
       } else {
         toast.info('No Mule applications found in your repositories.');
       }
     } catch (err) {
-      console.error('Repository scan error:', err);
       setError('Failed to fetch repositories');
       toast.error('Failed to fetch repositories. Please check your token and permissions.');
     } finally {
@@ -340,70 +307,134 @@ const Migration = () => {
               <p className="text-gray-500">No Mule applications found. Click 'Fetch Mule Applications' to scan.</p>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[50px]">Select</TableHead>
-                  <TableHead>Application</TableHead>
-                  <TableHead>Repository</TableHead>
-                  <TableHead>Mule Version</TableHead>
-                  <TableHead>Java Version</TableHead>
-                  <TableHead>Dependencies</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {applications.map((app) => (
-                  <TableRow key={app.id}>
-                    <TableCell>
-                      <input
-                        type="checkbox"
-                        checked={!!app.selected}
-                        onChange={() => toggleApplicationSelection(app.id)}
-                      />
-                    </TableCell>
-                    <TableCell className="font-medium">{app.name}</TableCell>
-                    <TableCell>
-                      <a href={app.repository} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                        {app.repository.split('/').slice(-2).join('/')}
-                      </a>
-                    </TableCell>
-                    <TableCell>{app.muleVersion}</TableCell>
-                    <TableCell>{app.javaVersion}</TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        {app.dependencies.slice(0, 3).map((dep, index) => (
-                          <div key={index} className="flex items-center space-x-2">
-                            <span className="text-sm">{dep.artifactId}</span>
-                            <Badge variant={dep.isDeprecated ? "destructive" : "secondary"} className="text-xs">
-                              {dep.version}
-                            </Badge>
-                            {dep.isDeprecated && dep.replacement && (
-                              <Badge variant="outline" className="text-yellow-600 text-xs">
-                                Replace with {dep.replacement}
+            <div className="overflow-x-auto">
+              <Table className="min-w-[1400px] border border-gray-300 border-collapse">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[50px] border border-gray-300">Select</TableHead>
+                    <TableHead className="border border-gray-300">Application</TableHead>
+                    <TableHead className="border border-gray-300">Repository</TableHead>
+                    <TableHead className="border border-gray-300">Mule Version</TableHead>
+                    <TableHead className="border border-gray-300">Java Version</TableHead>
+                    <TableHead className="border border-gray-300">Dependencies</TableHead>
+                    <TableHead className="border border-gray-300">Connectors</TableHead>
+                    <TableHead className="border border-gray-300">Artifact JSON</TableHead>
+                    <TableHead className="border border-gray-300">Latest Version</TableHead>
+                    <TableHead className="border border-gray-300">Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {applications.map((app) => (
+                    <TableRow key={app.id}>
+                      <TableCell className="border border-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={!!app.selected}
+                          onChange={() => toggleApplicationSelection(app.id)}
+                        />
+                      </TableCell>
+                      <TableCell className="border border-gray-300">{app.applicationName}</TableCell>
+                      <TableCell className="border border-gray-300">
+                        <a href={app.repository} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                          {app.repository.split('/').slice(-2).join('/')}
+                        </a>
+                      </TableCell>
+                      <TableCell className="border border-gray-300">
+                        {app.muleVersion}
+                        <div className="text-xs text-gray-500">Latest: {getLatestMuleVersion()}</div>
+                      </TableCell>
+                      <TableCell className="border border-gray-300">
+                        {app.javaVersion}
+                        <div className="text-xs text-gray-500">Latest: {getLatestJavaVersion()}</div>
+                      </TableCell>
+                      <TableCell className="border border-gray-300">
+                        <div className="space-y-1">
+                          {app.dependencies.slice(0, 3).map((dep, index) => (
+                            <div key={index} className="flex items-center space-x-2">
+                              <span className="text-sm">{dep.artifactId}</span>
+                              <Badge variant={dep.isDeprecated ? "destructive" : "secondary"} className="text-xs">
+                                {dep.version}
                               </Badge>
+                              {dep.isDeprecated && dep.replacement && (
+                                <Badge variant="outline" className="text-yellow-600 text-xs">
+                                  Replace with {dep.replacement}
+                                </Badge>
+                              )}
+                              <span className="text-xs text-gray-500">Latest: {dep.latestVersion}</span>
+                            </div>
+                          ))}
+                          {app.dependencies.length > 3 && (
+                            <div className="text-xs text-gray-500">
+                              +{app.dependencies.length - 3} more
+                            </div>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="border border-gray-300">
+                        <div className="space-y-1">
+                          {app.connectors.slice(0, 3).map((conn, index) => (
+                            <div key={index} className="flex items-center space-x-2">
+                              <span className="text-sm">{conn.artifactId}</span>
+                              <Badge variant={conn.isDeprecated ? "destructive" : "secondary"} className="text-xs">
+                                {conn.version}
+                              </Badge>
+                              {conn.isDeprecated && conn.replacement && (
+                                <Badge variant="outline" className="text-yellow-600 text-xs">
+                                  Replace with {conn.replacement}
+                                </Badge>
+                              )}
+                            </div>
+                          ))}
+                          {app.connectors.length > 3 && (
+                            <div className="text-xs text-gray-500">
+                              +{app.connectors.length - 3} more
+                            </div>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="border border-gray-300">
+                        {app.artifactJson && (
+                          <div className="space-y-1">
+                            {Object.entries(app.artifactJson).slice(0, 3).map(([key, value], index) => (
+                              <div key={index} className="flex items-center space-x-2">
+                                <span className="text-sm">{key}</span>
+                                <Badge variant="secondary" className="text-xs">
+                                  {String(value)}
+                                </Badge>
+                              </div>
+                            ))}
+                            {Object.entries(app.artifactJson).length > 3 && (
+                              <div className="text-xs text-gray-500">
+                                +{Object.entries(app.artifactJson).length - 3} more
+                              </div>
                             )}
                           </div>
-                        ))}
-                        {app.dependencies.length > 3 && (
-                          <div className="text-xs text-gray-500">
-                            +{app.dependencies.length - 3} more
-                          </div>
                         )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center space-x-2">
-                        {getStatusIcon(app.status)}
-                        <span className={getStatusColor(app.status)}>
-                          {app.status.replace('_', ' ')}
-                        </span>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                      </TableCell>
+                      <TableCell className="border border-gray-300">
+                        <div className="space-y-1">
+                          <div className="text-xs">Mule: {getLatestMuleVersion()}</div>
+                          <div className="text-xs">Java: {getLatestJavaVersion()}</div>
+                          {app.dependencies.map(dep => (
+                            <div key={dep.artifactId} className="text-xs">
+                              {dep.artifactId}: {dep.latestVersion}
+                            </div>
+                          ))}
+                        </div>
+                      </TableCell>
+                      <TableCell className="border border-gray-300">
+                        <div className="flex items-center space-x-2">
+                          {getStatusIcon(app.status)}
+                          <span className={getStatusColor(app.status)}>
+                            {app.status.replace('_', ' ')}
+                          </span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>
