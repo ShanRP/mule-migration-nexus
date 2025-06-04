@@ -107,7 +107,6 @@ const Dashboard = () => {
     return null;
   };
 
-  // Updated Azure DevOps file content fetching using CORS proxy
   const fetchAzureFileContent = async (organization: string, project: string, repoId: string, filePath: string, token: string): Promise<string | null> => {
     try {
       console.log(`Fetching ${filePath} from Azure DevOps repo ${organization}/${project}/${repoId}`);
@@ -153,7 +152,6 @@ const Dashboard = () => {
     return files;
   };
 
-  // Updated Azure DevOps file listing using CORS proxy
   const listAllAzureFiles = async (organization: string, project: string, repoId: string, path: string, token: string): Promise<string[]> => {
     let files: string[] = [];
     try {
@@ -200,73 +198,94 @@ const Dashboard = () => {
       if (page > 10) break;
     }
 
-    const muleApps: MuleApplication[] = [];
+    const muleAppsMap = new Map<string, MuleApplication>(); // Use Map to avoid duplicates by repository
+    
     for (const repo of allRepos) {
       try {
+        console.log(`Scanning repository: ${repo.name}`);
         const allFiles = await listAllGitHubFiles(repo.full_name, '', token);
         const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
         const artifactJsonFiles = allFiles.filter(f => f.endsWith('mule-artifact.json'));
         const projectXmlFiles = allFiles.filter(f => f.endsWith('.xml') && f.includes('src/main/mule/'));
         
+        console.log(`Found in ${repo.name}:`, { pomFiles: pomFiles.length, artifactJsonFiles: artifactJsonFiles.length, projectXmlFiles: projectXmlFiles.length });
+
+        // Check if any POM file contains a Mule application
+        let isMuleRepo = false;
+        let mainPomPath = '';
+        let applicationInfo = null;
+        
         for (const pomPath of pomFiles) {
           const pomXml = await fetchGitHubFileContent(repo.full_name, pomPath, token);
-          if (!pomXml || !isMuleApplication(pomXml)) continue;
-          
-          const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
-          const artifactJsonPath = `${pomDir}/src/main/mule/mule-artifact.json`;
-          let artifactJson = null;
-          
-          console.log(`Looking for artifact JSON at: ${artifactJsonPath}`);
-          const artifactJsonContent = await fetchGitHubFileContent(repo.full_name, artifactJsonPath, token);
-          if (artifactJsonContent) {
-            try {
-              artifactJson = JSON.parse(artifactJsonContent);
-              console.log('Successfully parsed artifact JSON:', artifactJson);
-            } catch (error) {
-              console.log('Error parsing artifact JSON:', error);
-            }
-          } else {
-            // Try alternative paths
-            const altPaths = [
-              `${pomDir}/mule-artifact.json`,
-              `${pomDir}/src/main/resources/mule-artifact.json`
-            ];
+          if (pomXml && isMuleApplication(pomXml)) {
+            console.log(`Found Mule application in: ${pomPath}`);
+            isMuleRepo = true;
+            mainPomPath = pomPath;
             
-            for (const altPath of altPaths) {
-              console.log(`Trying alternative path: ${altPath}`);
-              const altContent = await fetchGitHubFileContent(repo.full_name, altPath, token);
-              if (altContent) {
-                try {
-                  artifactJson = JSON.parse(altContent);
-                  console.log('Successfully parsed artifact JSON from alternative path:', artifactJson);
-                  break;
-                } catch (error) {
-                  console.log('Error parsing artifact JSON from alternative path:', error);
+            const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
+            const artifactJsonPath = `${pomDir}/src/main/mule/mule-artifact.json`;
+            let artifactJson = null;
+            
+            console.log(`Looking for artifact JSON at: ${artifactJsonPath}`);
+            const artifactJsonContent = await fetchGitHubFileContent(repo.full_name, artifactJsonPath, token);
+            if (artifactJsonContent) {
+              try {
+                artifactJson = JSON.parse(artifactJsonContent);
+                console.log('Successfully parsed artifact JSON:', artifactJson);
+              } catch (error) {
+                console.log('Error parsing artifact JSON:', error);
+              }
+            } else {
+              // Try alternative paths
+              const altPaths = [
+                `${pomDir}/mule-artifact.json`,
+                `${pomDir}/src/main/resources/mule-artifact.json`
+              ];
+              
+              for (const altPath of altPaths) {
+                console.log(`Trying alternative path: ${altPath}`);
+                const altContent = await fetchGitHubFileContent(repo.full_name, altPath, token);
+                if (altContent) {
+                  try {
+                    artifactJson = JSON.parse(altContent);
+                    console.log('Successfully parsed artifact JSON from alternative path:', artifactJson);
+                    break;
+                  } catch (error) {
+                    console.log('Error parsing artifact JSON from alternative path:', error);
+                  }
                 }
               }
             }
+            
+            applicationInfo = extractMuleInfo(pomXml, artifactJson);
+            break; // Use the first valid Mule application found
           }
+        }
+        
+        if (isMuleRepo && applicationInfo) {
+          console.log(`Processing Mule repository: ${repo.name}`);
           
-          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml, artifactJson);
-          
+          // Analyze connectors from all XML files
           let connectors: any[] = [];
           const configPaths = [
-            `${pomDir}/src/main/mule/mule-configuration.xml`,
-            `${pomDir}/src/main/app/mule-configuration.xml`,
-            `${pomDir}/src/main/resources/mule-configuration.xml`,
-            `${pomDir}/mule-configuration.xml`
+            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule/mule-configuration.xml`,
+            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/app/mule-configuration.xml`,
+            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/resources/mule-configuration.xml`,
+            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/mule-configuration.xml`
           ];
+          
           for (const configPath of configPaths) {
             const configXml = await fetchGitHubFileContent(repo.full_name, configPath, token);
             if (configXml) {
               connectors = analyzeMuleConfiguration(configXml);
+              console.log(`Found ${connectors.length} connectors in ${configPath}`);
               break;
             }
           }
           
           if (connectors.length === 0) {
             try {
-              const muleDirPath = `${pomDir}/src/main/mule`;
+              const muleDirPath = `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule`;
               const muleDir = await axios.get(
                 `https://api.github.com/repos/${repo.full_name}/contents/${muleDirPath}`,
                 { headers: { Authorization: `token ${token}` } }
@@ -276,7 +295,8 @@ const Dashboard = () => {
                   if (file.name.endsWith('.xml')) {
                     const xmlContent = await fetchGitHubFileContent(repo.full_name, file.path, token);
                     if (xmlContent) {
-                      connectors = [...connectors, ...analyzeMuleConfiguration(xmlContent)];
+                      const fileConnectors = analyzeMuleConfiguration(xmlContent);
+                      connectors = [...connectors, ...fileConnectors];
                     }
                   }
                 }
@@ -284,32 +304,42 @@ const Dashboard = () => {
             } catch {}
           }
           
-          muleApps.push({
-            id: `${repo.id}-${pomPath}`,
+          // Create a single entry for this repository with all file paths consolidated
+          const muleApp: MuleApplication = {
+            id: `${repo.id}`, // Use repository ID as unique identifier
             name: repo.name,
             repository: repo.html_url,
             branch: repo.default_branch,
-            applicationName,
-            muleRuntime,
-            muleVersion,
-            javaVersion,
-            dependencies,
+            applicationName: applicationInfo.applicationName,
+            muleRuntime: applicationInfo.muleRuntime,
+            muleVersion: applicationInfo.muleVersion,
+            javaVersion: applicationInfo.javaVersion,
+            dependencies: applicationInfo.dependencies,
             connectors,
             status: 'pending',
             lastUpdated: repo.updated_at,
-            pomPaths: [pomPath],
-            artifactJsonPaths: artifactJsonFiles.filter(f => f.startsWith(pomDir)),
-            projectXmlPaths: projectXmlFiles.filter(f => f.startsWith(pomDir))
-          });
+            pomPaths: pomFiles, // Include all POM files found
+            artifactJsonPaths: artifactJsonFiles, // Include all artifact JSON files
+            projectXmlPaths: projectXmlFiles // Include all project XML files
+          };
+          
+          // Only add if not already processed (avoid duplicates)
+          if (!muleAppsMap.has(repo.id.toString())) {
+            muleAppsMap.set(repo.id.toString(), muleApp);
+            console.log(`Added unique Mule app: ${applicationInfo.applicationName} for repository ${repo.name}`);
+          }
         }
       } catch (error) {
+        console.log(`Error processing repository ${repo.name}:`, error);
         // skip repo on error
       }
     }
-    return muleApps;
+    
+    const uniqueMuleApps = Array.from(muleAppsMap.values());
+    console.log(`Total unique Mule applications found: ${uniqueMuleApps.length}`);
+    return uniqueMuleApps;
   };
 
-  // Updated Azure DevOps scanning using CORS proxy
   const scanAzureRepositories = async (token: string, organization: string) => {
     let allRepos = [];
     try {
@@ -374,7 +404,8 @@ const Dashboard = () => {
 
     console.log(`Total Azure DevOps repositories to scan: ${allRepos.length}`);
 
-    const muleApps: MuleApplication[] = [];
+    const muleAppsMap = new Map<string, MuleApplication>(); // Use Map to avoid duplicates by repository
+    
     for (const repo of allRepos) {
       try {
         console.log(`Scanning Azure DevOps repo: ${repo.name} (ID: ${repo.repoId}) in project ${repo.project}`);
@@ -392,48 +423,57 @@ const Dashboard = () => {
           projectXmlFiles: projectXmlFiles.length 
         });
         
+        // Check if any POM file contains a Mule application
+        let isMuleRepo = false;
+        let mainPomPath = '';
+        let applicationInfo = null;
+        
         for (const pomPath of pomFiles) {
           console.log(`Processing pom.xml: ${pomPath}`);
           const pomXml = await fetchAzureFileContent(organization, repo.project, repo.repoId, pomPath, token);
-          if (!pomXml || !isMuleApplication(pomXml)) {
-            console.log(`Not a Mule application: ${pomPath}`);
-            continue;
-          }
-          
-          console.log(`Found Mule application in: ${pomPath}`);
-          
-          const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/')) || '';
-          let artifactJson = null;
-          
-          const artifactJsonPaths = [
-            `${pomDir}/src/main/mule/mule-artifact.json`,
-            `${pomDir}/mule-artifact.json`,
-            `${pomDir}/src/main/resources/mule-artifact.json`
-          ].filter(path => path !== '/');
-          
-          for (const ajPath of artifactJsonPaths) {
-            console.log(`Looking for artifact JSON at: ${ajPath}`);
-            const artifactJsonContent = await fetchAzureFileContent(organization, repo.project, repo.repoId, ajPath, token);
-            if (artifactJsonContent) {
-              try {
-                artifactJson = JSON.parse(artifactJsonContent);
-                console.log('Successfully parsed artifact JSON:', artifactJson);
-                break;
-              } catch (error) {
-                console.log('Error parsing artifact JSON:', error);
+          if (pomXml && isMuleApplication(pomXml)) {
+            console.log(`Found Mule application in: ${pomPath}`);
+            isMuleRepo = true;
+            mainPomPath = pomPath;
+            
+            const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/')) || '';
+            let artifactJson = null;
+            
+            const artifactJsonPaths = [
+              `${pomDir}/src/main/mule/mule-artifact.json`,
+              `${pomDir}/mule-artifact.json`,
+              `${pomDir}/src/main/resources/mule-artifact.json`
+            ].filter(path => path !== '/');
+            
+            for (const ajPath of artifactJsonPaths) {
+              console.log(`Looking for artifact JSON at: ${ajPath}`);
+              const artifactJsonContent = await fetchAzureFileContent(organization, repo.project, repo.repoId, ajPath, token);
+              if (artifactJsonContent) {
+                try {
+                  artifactJson = JSON.parse(artifactJsonContent);
+                  console.log('Successfully parsed artifact JSON:', artifactJson);
+                  break;
+                } catch (error) {
+                  console.log('Error parsing artifact JSON:', error);
+                }
               }
             }
+            
+            applicationInfo = extractMuleInfo(pomXml, artifactJson);
+            console.log('Extracted Mule info:', { applicationName: applicationInfo.applicationName, muleRuntime: applicationInfo.muleRuntime, muleVersion: applicationInfo.muleVersion, javaVersion: applicationInfo.javaVersion, dependencies: applicationInfo.dependencies.length });
+            break; // Use the first valid Mule application found
           }
-          
-          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml, artifactJson);
-          console.log('Extracted Mule info:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies: dependencies.length });
+        }
+        
+        if (isMuleRepo && applicationInfo) {
+          console.log(`Processing Mule repository: ${repo.name}`);
           
           let connectors: any[] = [];
           const configPaths = [
-            `${pomDir}/src/main/mule/mule-configuration.xml`,
-            `${pomDir}/src/main/app/mule-configuration.xml`,
-            `${pomDir}/src/main/resources/mule-configuration.xml`,
-            `${pomDir}/mule-configuration.xml`
+            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule/mule-configuration.xml`,
+            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/app/mule-configuration.xml`,
+            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/resources/mule-configuration.xml`,
+            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/mule-configuration.xml`
           ].filter(path => path !== '/');
           
           for (const configPath of configPaths) {
@@ -446,7 +486,7 @@ const Dashboard = () => {
           }
           
           if (connectors.length === 0) {
-            const muleDirPath = `${pomDir}/src/main/mule`;
+            const muleDirPath = `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule`;
             const muleFiles = allFiles.filter(f => f.startsWith(muleDirPath) && f.endsWith('.xml'));
             console.log(`Checking ${muleFiles.length} XML files in mule directory`);
             for (const xmlFile of muleFiles) {
@@ -460,40 +500,39 @@ const Dashboard = () => {
           
           console.log(`Total connectors found: ${connectors.length}`);
           
-          const relatedArtifactJsonFiles = artifactJsonFiles.filter(f => f.startsWith(pomDir));
-          const relatedProjectXmlFiles = projectXmlFiles.filter(f => f.startsWith(pomDir));
-          
-          muleApps.push({
-            id: `${repo.repoId}-${pomPath}`,
+          // Create a single entry for this repository with all file paths consolidated
+          const muleApp: MuleApplication = {
+            id: `${repo.repoId}`, // Use repository ID as unique identifier
             name: repo.name,
             repository: repo.webUrl || `https://dev.azure.com/${organization}/${repo.project}/_git/${repo.name}`,
             branch: repo.defaultBranch?.replace('refs/heads/', '') || 'main',
-            applicationName,
-            muleRuntime,
-            muleVersion,
-            javaVersion,
-            dependencies,
+            applicationName: applicationInfo.applicationName,
+            muleRuntime: applicationInfo.muleRuntime,
+            muleVersion: applicationInfo.muleVersion,
+            javaVersion: applicationInfo.javaVersion,
+            dependencies: applicationInfo.dependencies,
             connectors,
             status: 'pending',
             lastUpdated: new Date().toISOString(),
-            pomPaths: [pomPath],
-            artifactJsonPaths: relatedArtifactJsonFiles,
-            projectXmlPaths: relatedProjectXmlFiles
-          });
+            pomPaths: pomFiles, // Include all POM files found
+            artifactJsonPaths: artifactJsonFiles, // Include all artifact JSON files
+            projectXmlPaths: projectXmlFiles // Include all project XML files
+          };
           
-          console.log(`Added Mule app: ${applicationName} with paths:`, {
-            pomPaths: [pomPath],
-            artifactJsonPaths: relatedArtifactJsonFiles,
-            projectXmlPaths: relatedProjectXmlFiles
-          });
+          // Only add if not already processed (avoid duplicates)
+          if (!muleAppsMap.has(repo.repoId)) {
+            muleAppsMap.set(repo.repoId, muleApp);
+            console.log(`Added unique Mule app: ${applicationInfo.applicationName} for repository ${repo.name}`);
+          }
         }
       } catch (error) {
         console.log(`Error processing Azure repo ${repo.name}:`, error);
       }
     }
     
-    console.log(`Total Mule applications found in Azure DevOps: ${muleApps.length}`);
-    return muleApps;
+    const uniqueMuleApps = Array.from(muleAppsMap.values());
+    console.log(`Total unique Mule applications found in Azure DevOps: ${uniqueMuleApps.length}`);
+    return uniqueMuleApps;
   };
 
   const handleScanRepositories = async () => {
@@ -530,7 +569,7 @@ const Dashboard = () => {
       setApplications(muleApps);
       setShowRepositories(true);
       if (muleApps.length > 0) {
-        toast.success(`Found ${muleApps.length} Mule application(s) with comprehensive analysis!`);
+        toast.success(`Found ${muleApps.length} unique Mule application(s) with comprehensive analysis!`);
       } else {
         toast.info('No Mule applications found in your repositories.');
       }
