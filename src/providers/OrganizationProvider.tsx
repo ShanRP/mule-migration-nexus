@@ -1,3 +1,4 @@
+
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/components/AuthProvider';
@@ -106,7 +107,7 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           github_token: organization.github_token,
           azure_devops_url: organization.azure_devops_url,
           azure_devops_token: organization.azure_devops_token,
-          repository_type: organization.repository_type || 'github'
+          repository_type: (organization.repository_type === 'azure_devops' ? 'azure_devops' : 'github') as 'github' | 'azure_devops'
         }));
       } else {
         // Default organization should have been created by the trigger
@@ -142,7 +143,7 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           github_token: newOrganization.github_token,
           azure_devops_url: newOrganization.azure_devops_url,
           azure_devops_token: newOrganization.azure_devops_token,
-          repository_type: newOrganization.repository_type || 'github'
+          repository_type: (newOrganization.repository_type === 'azure_devops' ? 'azure_devops' : 'github') as 'github' | 'azure_devops'
         }];
       }
 
@@ -228,7 +229,7 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         github_token: data.github_token,
         azure_devops_url: data.azure_devops_url,
         azure_devops_token: data.azure_devops_token,
-        repository_type: data.repository_type || 'github'
+        repository_type: (data.repository_type === 'azure_devops' ? 'azure_devops' : 'github') as 'github' | 'azure_devops'
       };
 
       // Update organizations array with new organization
