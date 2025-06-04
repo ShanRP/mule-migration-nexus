@@ -129,7 +129,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     return { pomPaths, artifactJsonPaths, projectXmlPaths };
   };
 
-  // Helper function to update dependency versions in POM XML (ONLY app.runtime)
+  // Enhanced function to update dependency versions in POM XML (ONLY app.runtime + remove CloudHub deps)
   const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[]): string => {
     let updatedPom = pomXml;
     
@@ -139,6 +139,36 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
       /<app\.runtime>.*?<\/app\.runtime>/g,
       `<app.runtime>${latestMuleVersion}</app.runtime>`
     );
+    
+    // Remove ONLY CloudHub dependencies with more precise patterns
+    console.log('Removing CloudHub dependencies from POM...');
+    
+    // More precise CloudHub dependency removal patterns
+    const cloudHubDepPatterns = [
+      // Specific CloudHub module dependency
+      /<dependency>\s*<groupId>org\.mule\.modules<\/groupId>\s*<artifactId>mule-module-cloudhub<\/artifactId>[\s\S]*?<\/dependency>/g,
+      
+      // CloudHub connector dependencies
+      /<dependency>\s*<groupId>org\.mule\.connectors<\/groupId>\s*<artifactId>mule-cloudhub-connector<\/artifactId>[\s\S]*?<\/dependency>/g,
+      
+      // Any dependency with cloudhub in artifactId
+      /<dependency>[\s\S]*?<artifactId>[^<]*cloudhub[^<]*<\/artifactId>[\s\S]*?<\/dependency>/g,
+      
+      // CloudHub specific groupIds
+      /<dependency>\s*<groupId>com\.mulesoft\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g,
+      /<dependency>\s*<groupId>com\.mulesoft\.modules\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g
+    ];
+    
+    cloudHubDepPatterns.forEach(pattern => {
+      const matches = updatedPom.match(pattern);
+      if (matches) {
+        console.log('Found CloudHub dependencies to remove:', matches);
+        updatedPom = updatedPom.replace(pattern, '');
+      }
+    });
+    
+    // Clean up any double empty lines left by removed dependencies
+    updatedPom = updatedPom.replace(/\n\s*\n\s*\n/g, '\n\n');
     
     // Update each dependency to its latest version
     dependencies.forEach(dep => {
@@ -161,6 +191,77 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     }
     
     return updatedPom;
+  };
+
+  // Enhanced function to replace CloudHub connectors with Logger in XML files
+  const replaceCloudHubConnectors = (xmlContent: string): string => {
+    console.log('Replacing CloudHub connectors with Logger connectors...');
+    let updatedXml = xmlContent;
+    
+    // Add Logger namespace if not present
+    if (!updatedXml.includes('xmlns:logger=')) {
+      const muleTag = updatedXml.match(/<mule[^>]*>/);
+      if (muleTag) {
+        const updatedMuleTag = muleTag[0].replace('>', ' xmlns:logger="http://www.mulesoft.org/schema/mule/logger" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/logger http://www.mulesoft.org/schema/mule/logger/current/mule-logger.xsd">');
+        updatedXml = updatedXml.replace(muleTag[0], updatedMuleTag);
+      }
+    }
+    
+    // Replace CloudHub connectors with Logger
+    const cloudHubPatterns = [
+      // CloudHub notification patterns
+      {
+        pattern: /<cloudhub:create-notification[^>]*>[\s\S]*?<\/cloudhub:create-notification>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub notification replaced with logger for CloudHub 2.0 migration" />'
+      },
+      {
+        pattern: /<cloudhub:create-notification[^>]*\/>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub notification replaced with logger for CloudHub 2.0 migration" />'
+      },
+      // CloudHub list notifications
+      {
+        pattern: /<cloudhub:list-notifications[^>]*>[\s\S]*?<\/cloudhub:list-notifications>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub list notifications replaced with logger for CloudHub 2.0 migration" />'
+      },
+      {
+        pattern: /<cloudhub:list-notifications[^>]*\/>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub list notifications replaced with logger for CloudHub 2.0 migration" />'
+      },
+      // CloudHub get application
+      {
+        pattern: /<cloudhub:get-application[^>]*>[\s\S]*?<\/cloudhub:get-application>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub get application replaced with logger for CloudHub 2.0 migration" />'
+      },
+      {
+        pattern: /<cloudhub:get-application[^>]*\/>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub get application replaced with logger for CloudHub 2.0 migration" />'
+      },
+      // General CloudHub operations
+      {
+        pattern: /<cloudhub:[^>]*>[\s\S]*?<\/cloudhub:[^>]*>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub operation replaced with logger for CloudHub 2.0 migration" />'
+      },
+      {
+        pattern: /<cloudhub:[^>]*\/>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub operation replaced with logger for CloudHub 2.0 migration" />'
+      }
+    ];
+    
+    cloudHubPatterns.forEach(({ pattern, replacement }) => {
+      const matches = updatedXml.match(pattern);
+      if (matches) {
+        console.log('Found CloudHub connectors to replace:', matches);
+        updatedXml = updatedXml.replace(pattern, replacement);
+      }
+    });
+    
+    // Remove CloudHub namespace if no more CloudHub elements exist
+    if (!/<cloudhub:/.test(updatedXml)) {
+      updatedXml = updatedXml.replace(/xmlns:cloudhub="[^"]*"\s*/g, '');
+      updatedXml = updatedXml.replace(/http:\/\/www\.mulesoft\.org\/schema\/mule\/cloudhub[^\s]*/g, '');
+    }
+    
+    return updatedXml;
   };
 
   const migrateGitHubApplication = async (app: MuleApplication) => {
@@ -224,7 +325,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
       console.log('Branch may already exist, continuing...');
     }
     
-    // 3. Update all pom.xml files with dependency version updates
+    // 3. Update all pom.xml files with dependency version updates and CloudHub removal
     if (pomPaths && pomPaths.length > 0) {
       console.log('Processing POM files:', pomPaths);
       
@@ -240,13 +341,13 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           const pomSha = pomRes.data.sha;
           const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
           
-          // Update POM with proper dependency version updates
+          // Update POM with proper dependency version updates and CloudHub removal
           const updatedPom = updatePomDependencies(pomXml, app.dependencies);
           
           await axios.put(
             `https://api.github.com/repos/${repoPath}/contents/${normPomPath}`,
             {
-              message: `Mule migration: update dependencies for CloudHub 2.0 - ${normPomPath}`,
+              message: `Mule migration: update dependencies and remove CloudHub for CloudHub 2.0 - ${normPomPath}`,
               content: btoa(updatedPom),
               branch: newBranch,
               sha: pomSha
@@ -263,7 +364,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
       console.log('No pom.xml files found to update');
     }
     
-    // 4. Update all mule-artifact.json files (ONLY Java version, no migration key)
+    // 4. Update all mule-artifact.json files (Java version + minMuleVersion sync)
     if (artifactJsonPaths && artifactJsonPaths.length > 0) {
       console.log('Processing artifact JSON files:', artifactJsonPaths);
       
@@ -279,17 +380,19 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           const ajSha = ajRes.data.sha;
           const ajJson = JSON.parse(atob(ajRes.data.content.replace(/\n/g, '')));
           
-          // Update Java version to latest (NO migration key)
+          // Update Java version and sync minMuleVersion with app.runtime
           const latestJavaVersion = getLatestJavaVersion();
+          const latestMuleVersion = getLatestMuleVersion();
           const updatedAj = { 
             ...ajJson, 
-            javaSpecificationVersions: [latestJavaVersion]
+            javaSpecificationVersions: [latestJavaVersion],
+            minMuleVersion: latestMuleVersion
           };
           
           await axios.put(
             `https://api.github.com/repos/${repoPath}/contents/${normAjPath}`,
             {
-              message: `Mule migration: update Java version for CloudHub 2.0 - ${normAjPath}`,
+              message: `Mule migration: update Java version and sync minMuleVersion for CloudHub 2.0 - ${normAjPath}`,
               content: btoa(JSON.stringify(updatedAj, null, 2)),
               branch: newBranch,
               sha: ajSha
@@ -306,7 +409,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
       console.log('No mule-artifact.json files found to update');
     }
     
-    // 5. Update all src/main/*.xml files
+    // 5. Update all src/main/mule/*.xml files with CloudHub connector replacement
     if (projectXmlPaths && projectXmlPaths.length > 0) {
       console.log('Processing project XML files:', projectXmlPaths);
       
@@ -321,12 +424,14 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           );
           const xmlSha = xmlRes.data.sha;
           const xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
-          const updatedXml = xmlContent + '\n<!-- Updated for CloudHub 2.0 migration -->';
+          
+          // Replace CloudHub connectors with Logger
+          const updatedXml = replaceCloudHubConnectors(xmlContent) + '\n<!-- Updated for CloudHub 2.0 migration -->';
           
           await axios.put(
             `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}`,
             {
-              message: `Mule migration: update for CloudHub 2.0 - ${normXmlPath}`,
+              message: `Mule migration: replace CloudHub connectors with Logger for CloudHub 2.0 - ${normXmlPath}`,
               content: btoa(updatedXml),
               branch: newBranch,
               sha: xmlSha
@@ -429,7 +534,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           );
           const pomXml = pomRes.data;
           
-          // Update POM with dependency version updates
+          // Update POM with dependency version updates and CloudHub removal
           const updatedPom = updatePomDependencies(pomXml, app.dependencies);
           
           changes.push({
@@ -465,11 +570,13 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           );
           const ajJson = JSON.parse(ajRes.data);
           
-          // Update Java version to latest (NO migration key)
+          // Update Java version and sync minMuleVersion with app.runtime
           const latestJavaVersion = getLatestJavaVersion();
+          const latestMuleVersion = getLatestMuleVersion();
           const updatedAj = { 
             ...ajJson, 
-            javaSpecificationVersions: [latestJavaVersion]
+            javaSpecificationVersions: [latestJavaVersion],
+            minMuleVersion: latestMuleVersion
           };
           
           changes.push({
@@ -487,7 +594,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
       }
     }
     
-    // Update all project XML files
+    // Update all project XML files with CloudHub connector replacement
     if (app.projectXmlPaths && app.projectXmlPaths.length > 0) {
       console.log('Processing project XML files for Azure DevOps:', app.projectXmlPaths);
       
@@ -504,7 +611,9 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
             }
           );
           const xmlContent = xmlRes.data;
-          const updatedXml = xmlContent + '\n<!-- Updated for CloudHub 2.0 migration -->';
+          
+          // Replace CloudHub connectors with Logger
+          const updatedXml = replaceCloudHubConnectors(xmlContent) + '\n<!-- Updated for CloudHub 2.0 migration -->';
           
           changes.push({
             changeType: 'edit',
@@ -532,7 +641,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
             oldObjectId: latestCommitId
           }],
           commits: [{
-            comment: 'Mule migration: update dependencies for CloudHub 2.0',
+            comment: 'Mule migration: update dependencies, replace CloudHub connectors, and sync versions for CloudHub 2.0',
             changes: changes
           }]
         },
