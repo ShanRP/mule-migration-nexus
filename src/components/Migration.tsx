@@ -86,31 +86,26 @@ const Migration = () => {
     return files;
   };
 
-  // Azure DevOps file operations
+  // Updated Azure DevOps file operations using CORS proxy
   const fetchAzureFileContent = async (organization: string, project: string, repoName: string, filePath: string, token: string): Promise<string | null> => {
     try {
       console.log(`Fetching ${filePath} from Azure DevOps repo ${organization}/${project}/${repoName}`);
-      const response = await axios.get(
-        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=${encodeURIComponent(filePath)}&api-version=6.0`,
-        { 
-          headers: { 
-            Authorization: `Basic ${btoa(':' + token)}`,
-            'Content-Type': 'application/json'
-          } 
+      
+      // Use CORS proxy service
+      const proxyUrl = 'https://corsproxy.io/?';
+      const targetUrl = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=${encodeURIComponent('/' + filePath)}&api-version=6.0`;
+      const fullUrl = proxyUrl + encodeURIComponent(targetUrl);
+      
+      const response = await axios.get(fullUrl, {
+        headers: {
+          'Authorization': `Basic ${btoa(':' + token)}`,
+          'Content-Type': 'application/json'
         }
-      );
+      });
       
       if (response.data) {
-        // Azure DevOps returns content in base64
-        const content = response.data.content;
-        if (content) {
-          try {
-            return atob(content);
-          } catch (e) {
-            console.error('Error decoding base64 content:', e);
-            return null;
-          }
-        }
+        console.log(`Successfully fetched ${filePath} from Azure DevOps`);
+        return response.data;
       }
     } catch (error) {
       console.error(`Error fetching ${filePath}:`, error);
@@ -122,18 +117,21 @@ const Migration = () => {
     let files: string[] = [];
     try {
       console.log(`Listing files in ${path} from Azure DevOps repo ${organization}/${project}/${repoName}`);
-      const res = await axios.get(
-        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=${encodeURIComponent(path)}&recursionLevel=Full&api-version=6.0`,
-        { 
-          headers: { 
-            Authorization: `Basic ${btoa(':' + token)}`,
-            'Content-Type': 'application/json'
-          } 
-        }
-      );
       
-      if (res.data && res.data.value) {
-        files = res.data.value
+      // Use CORS proxy service
+      const proxyUrl = 'https://corsproxy.io/?';
+      const targetUrl = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=${encodeURIComponent(path)}&recursionLevel=Full&api-version=6.0`;
+      const fullUrl = proxyUrl + encodeURIComponent(targetUrl);
+      
+      const response = await axios.get(fullUrl, {
+        headers: {
+          'Authorization': `Basic ${btoa(':' + token)}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.data && response.data.value) {
+        files = response.data.value
           .filter((item: any) => !item.isFolder)
           .map((item: any) => item.path.substring(1)); // Remove leading slash
         console.log(`Found ${files.length} files in ${path}`);
@@ -232,35 +230,39 @@ const Migration = () => {
     return muleApps;
   };
 
-  // Scan Azure DevOps repositories
+  // Updated Azure DevOps scanning using CORS proxy
   const scanAzureRepositories = async (token: string, organization: string) => {
     let allRepos = [];
     try {
-      console.log('Fetching Azure DevOps projects...');
+      console.log('Fetching Azure DevOps projects via CORS proxy...');
+      
+      // Use CORS proxy service
+      const proxyUrl = 'https://corsproxy.io/?';
+      
       // First get all projects
-      const projectsRes = await axios.get(
-        `https://dev.azure.com/${organization}/_apis/projects?api-version=6.0`,
-        { 
-          headers: { 
-            Authorization: `Basic ${btoa(':' + token)}`,
-            'Content-Type': 'application/json'
-          } 
+      const projectsUrl = `https://dev.azure.com/${organization}/_apis/projects?api-version=6.0`;
+      const projectsFullUrl = proxyUrl + encodeURIComponent(projectsUrl);
+      
+      const projectsRes = await axios.get(projectsFullUrl, {
+        headers: {
+          'Authorization': `Basic ${btoa(':' + token)}`,
+          'Content-Type': 'application/json'
         }
-      );
+      });
       
       // Then get repositories for each project
       for (const project of projectsRes.data.value) {
         try {
           console.log(`Fetching repos for project ${project.name}...`);
-          const reposRes = await axios.get(
-            `https://dev.azure.com/${organization}/${project.name}/_apis/git/repositories?api-version=6.0`,
-            { 
-              headers: { 
-                Authorization: `Basic ${btoa(':' + token)}`,
-                'Content-Type': 'application/json'
-              } 
+          const reposUrl = `https://dev.azure.com/${organization}/${project.name}/_apis/git/repositories?api-version=6.0`;
+          const reposFullUrl = proxyUrl + encodeURIComponent(reposUrl);
+          
+          const reposRes = await axios.get(reposFullUrl, {
+            headers: {
+              'Authorization': `Basic ${btoa(':' + token)}`,
+              'Content-Type': 'application/json'
             }
-          );
+          });
           
           for (const repo of reposRes.data.value) {
             allRepos.push({
@@ -376,85 +378,77 @@ const Migration = () => {
     const project = urlParts[4];
     const repoName = urlParts[6];
     
-    const repoRes = await axios.get(
-      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}?api-version=6.0`,
-      { 
-        headers: { 
-          Authorization: `Basic ${btoa(':' + azureToken)}`,
-          'Content-Type': 'application/json'
-        } 
+    // Use CORS proxy for Azure DevOps operations
+    const proxyUrl = 'https://corsproxy.io/?';
+    
+    const repoUrl = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}?api-version=6.0`;
+    const repoFullUrl = proxyUrl + encodeURIComponent(repoUrl);
+    
+    const repoRes = await axios.get(repoFullUrl, {
+      headers: {
+        'Authorization': `Basic ${btoa(':' + azureToken)}`,
+        'Content-Type': 'application/json'
       }
-    );
+    });
     
     const defaultBranchName = repoRes.data.defaultBranch.replace('refs/heads/', '');
     
-    const commitsRes = await axios.get(
-      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/commits?searchCriteria.itemVersion.version=${defaultBranchName}&$top=1&api-version=6.0`,
-      { 
-        headers: { 
-          Authorization: `Basic ${btoa(':' + azureToken)}`,
-          'Content-Type': 'application/json'
-        } 
+    const commitsUrl = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/commits?searchCriteria.itemVersion.version=${defaultBranchName}&$top=1&api-version=6.0`;
+    const commitsFullUrl = proxyUrl + encodeURIComponent(commitsUrl);
+    
+    const commitsRes = await axios.get(commitsFullUrl, {
+      headers: {
+        'Authorization': `Basic ${btoa(':' + azureToken)}`,
+        'Content-Type': 'application/json'
       }
-    );
+    });
     const latestCommitId = commitsRes.data.value[0].commitId;
     
-    const pomRes = await axios.get(
-      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=pom.xml&api-version=6.0`,
-      { 
-        headers: { 
-          Authorization: `Basic ${btoa(':' + azureToken)}`,
-          'Content-Type': 'application/json'
-        } 
-      }
-    );
-    const pomXml = pomRes.data;
+    const pomXml = await fetchAzureFileContent(organization, project, repoName, 'pom.xml', azureToken);
     const updatedPom = pomXml + '\n<!-- Updated for CloudHub 2.0 migration -->';
     
     const newBranch = 'mulemigration';
     try {
-      await axios.post(
-        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/refs?api-version=6.0`,
-        {
-          name: `refs/heads/${newBranch}`,
-          oldObjectId: '0000000000000000000000000000000000000000',
-          newObjectId: latestCommitId
-        },
-        { 
-          headers: { 
-            Authorization: `Basic ${btoa(':' + azureToken)}`,
-            'Content-Type': 'application/json'
-          } 
+      const createBranchUrl = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/refs?api-version=6.0`;
+      const createBranchFullUrl = proxyUrl + encodeURIComponent(createBranchUrl);
+      
+      await axios.post(createBranchFullUrl, {
+        name: `refs/heads/${newBranch}`,
+        oldObjectId: '0000000000000000000000000000000000000000',
+        newObjectId: latestCommitId
+      }, {
+        headers: {
+          'Authorization': `Basic ${btoa(':' + azureToken)}`,
+          'Content-Type': 'application/json'
         }
-      );
+      });
     } catch (e) {/* branch may already exist */}
     
-    await axios.post(
-      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/pushes?api-version=6.0`,
-      {
-        refUpdates: [{
-          name: `refs/heads/${newBranch}`,
-          oldObjectId: latestCommitId
-        }],
-        commits: [{
-          comment: 'Mule migration: update dependencies for CloudHub 2.0',
-          changes: [{
-            changeType: 'edit',
-            item: { path: '/pom.xml' },
-            newContent: {
-              content: updatedPom,
-              contentType: 'rawtext'
-            }
-          }]
+    const pushUrl = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/pushes?api-version=6.0`;
+    const pushFullUrl = proxyUrl + encodeURIComponent(pushUrl);
+    
+    await axios.post(pushFullUrl, {
+      refUpdates: [{
+        name: `refs/heads/${newBranch}`,
+        oldObjectId: latestCommitId
+      }],
+      commits: [{
+        comment: 'Mule migration: update dependencies for CloudHub 2.0',
+        changes: [{
+          changeType: 'edit',
+          item: { path: '/pom.xml' },
+          newContent: {
+            content: updatedPom,
+            contentType: 'rawtext'
+          }
         }]
-      },
-      { 
-        headers: { 
-          Authorization: `Basic ${btoa(':' + azureToken)}`,
-          'Content-Type': 'application/json'
-        } 
+      }]
+    }, {
+      headers: {
+        'Authorization': `Basic ${btoa(':' + azureToken)}`,
+        'Content-Type': 'application/json'
       }
-    );
+    });
   };
 
   // Fetch all repos and scan for Mule apps
