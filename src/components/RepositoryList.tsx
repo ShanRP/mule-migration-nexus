@@ -70,6 +70,65 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
   // Helper to normalize file paths (remove leading slash)
   const normalizePath = (path: string) => path.replace(/^\/+/, '');
 
+  // Enhanced function to discover file paths in repository
+  const discoverFilePaths = async (repoPath: string, branch: string): Promise<{
+    pomPaths: string[];
+    artifactJsonPaths: string[];
+    projectXmlPaths: string[];
+  }> => {
+    console.log(`Discovering file paths in ${repoPath} on branch ${branch}`);
+    
+    const pomPaths: string[] = [];
+    const artifactJsonPaths: string[] = [];
+    const projectXmlPaths: string[] = [];
+
+    try {
+      // Recursively search for files in the repository
+      const searchFiles = async (path: string = '') => {
+        try {
+          const contentsRes = await axios.get(
+            `https://api.github.com/repos/${repoPath}/contents/${path}?ref=${branch}`,
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+
+          if (Array.isArray(contentsRes.data)) {
+            for (const item of contentsRes.data) {
+              if (item.type === 'file') {
+                // Check for pom.xml files
+                if (item.name === 'pom.xml') {
+                  pomPaths.push(item.path);
+                  console.log(`Found pom.xml: ${item.path}`);
+                }
+                // Check for mule-artifact.json files
+                else if (item.name === 'mule-artifact.json') {
+                  artifactJsonPaths.push(item.path);
+                  console.log(`Found mule-artifact.json: ${item.path}`);
+                }
+                // Check for XML files in src/main/mule directory
+                else if (item.name.endsWith('.xml') && item.path.includes('src/main/mule/')) {
+                  projectXmlPaths.push(item.path);
+                  console.log(`Found project XML: ${item.path}`);
+                }
+              } else if (item.type === 'dir') {
+                // Recursively search directories
+                await searchFiles(item.path);
+              }
+            }
+          }
+        } catch (error) {
+          console.log(`Error searching in ${path}:`, error);
+        }
+      };
+
+      await searchFiles();
+    } catch (error) {
+      console.error('Error discovering file paths:', error);
+    }
+
+    console.log('Discovery results:', { pomPaths, artifactJsonPaths, projectXmlPaths });
+    return { pomPaths, artifactJsonPaths, projectXmlPaths };
+  };
+
   const migrateGitHubApplication = async (app: MuleApplication) => {
     console.log('Starting migration for app:', app.applicationName);
     console.log('App file paths:', {
@@ -80,6 +139,31 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
 
     const repoPath = app.repository.replace('https://github.com/', '');
     const newBranch = 'mulemigration';
+    
+    // If file paths are not available, discover them first
+    let pomPaths = app.pomPaths;
+    let artifactJsonPaths = app.artifactJsonPaths;
+    let projectXmlPaths = app.projectXmlPaths;
+
+    if (!pomPaths || pomPaths.length === 0 || !artifactJsonPaths || !projectXmlPaths) {
+      console.log('File paths not available, discovering them...');
+      const discoveredPaths = await discoverFilePaths(repoPath, app.branch);
+      pomPaths = discoveredPaths.pomPaths;
+      artifactJsonPaths = discoveredPaths.artifactJsonPaths;
+      projectXmlPaths = discoveredPaths.projectXmlPaths;
+      
+      // Update the application with discovered paths
+      setApplications(prev => prev.map(a => 
+        a.id === app.id 
+          ? { 
+              ...a, 
+              pomPaths: discoveredPaths.pomPaths,
+              artifactJsonPaths: discoveredPaths.artifactJsonPaths,
+              projectXmlPaths: discoveredPaths.projectXmlPaths
+            }
+          : a
+      ));
+    }
     
     // 1. Get base branch SHA
     console.log(`Getting SHA for branch: ${app.branch}`);
@@ -107,130 +191,139 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     }
     
     // 3. Update all pom.xml files
-    const pomPaths = app.pomPaths && app.pomPaths.length > 0 ? app.pomPaths : ['pom.xml'];
-    console.log('Processing POM files:', pomPaths);
-    
-    for (const pomPath of pomPaths) {
-      const normPomPath = normalizePath(pomPath);
-      console.log('Attempting to fetch/update pom.xml:', normPomPath, 'on branch', app.branch);
+    if (pomPaths && pomPaths.length > 0) {
+      console.log('Processing POM files:', pomPaths);
       
-      try {
-        const pomRes = await axios.get(
-          `https://api.github.com/repos/${repoPath}/contents/${normPomPath}?ref=${app.branch}`,
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
-        const pomSha = pomRes.data.sha;
-        const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
+      for (const pomPath of pomPaths) {
+        const normPomPath = normalizePath(pomPath);
+        console.log('Attempting to fetch/update pom.xml:', normPomPath, 'on branch', app.branch);
         
-        // Update Mule runtime version in pom.xml
-        let updatedPom = pomXml;
-        
-        // Update app.runtime version
-        const latestMuleVersion = getLatestMuleVersion();
-        updatedPom = updatedPom.replace(
-          /<app\.runtime>.*?<\/app\.runtime>/g,
-          `<app.runtime>${latestMuleVersion}</app.runtime>`
-        );
-        
-        // Update mule.maven.plugin.version if present
-        updatedPom = updatedPom.replace(
-          /<mule\.maven\.plugin\.version>.*?<\/mule\.maven\.plugin\.version>/g,
-          `<mule.maven.plugin.version>4.9.0</mule.maven.plugin.version>`
-        );
-        
-        // Add migration comment
-        updatedPom = updatedPom + '\n<!-- Updated for CloudHub 2.0 migration -->';
-        
-        await axios.put(
-          `https://api.github.com/repos/${repoPath}/contents/${normPomPath}`,
-          {
-            message: `Mule migration: update dependencies for CloudHub 2.0 - ${normPomPath}`,
-            content: btoa(updatedPom),
-            branch: newBranch,
-            sha: pomSha
-          },
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
-        console.log('Successfully updated:', normPomPath);
-      } catch (error) {
-        console.error(`Failed to update ${normPomPath}:`, error);
-        // Continue with other files even if one fails
+        try {
+          const pomRes = await axios.get(
+            `https://api.github.com/repos/${repoPath}/contents/${normPomPath}?ref=${app.branch}`,
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          const pomSha = pomRes.data.sha;
+          const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
+          
+          // Update Mule runtime version in pom.xml
+          let updatedPom = pomXml;
+          
+          // Update app.runtime version
+          const latestMuleVersion = getLatestMuleVersion();
+          updatedPom = updatedPom.replace(
+            /<app\.runtime>.*?<\/app\.runtime>/g,
+            `<app.runtime>${latestMuleVersion}</app.runtime>`
+          );
+          
+          // Update mule.maven.plugin.version if present
+          updatedPom = updatedPom.replace(
+            /<mule\.maven\.plugin\.version>.*?<\/mule\.maven\.plugin\.version>/g,
+            `<mule.maven.plugin.version>4.9.0</mule.maven.plugin.version>`
+          );
+          
+          // Add migration comment
+          updatedPom = updatedPom + '\n<!-- Updated for CloudHub 2.0 migration -->';
+          
+          await axios.put(
+            `https://api.github.com/repos/${repoPath}/contents/${normPomPath}`,
+            {
+              message: `Mule migration: update dependencies for CloudHub 2.0 - ${normPomPath}`,
+              content: btoa(updatedPom),
+              branch: newBranch,
+              sha: pomSha
+            },
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          console.log('Successfully updated:', normPomPath);
+        } catch (error) {
+          console.error(`Failed to update ${normPomPath}:`, error);
+          // Continue with other files even if one fails
+        }
       }
+    } else {
+      console.log('No pom.xml files found to update');
     }
     
     // 4. Update all mule-artifact.json files
-    const artifactJsonPaths = app.artifactJsonPaths && app.artifactJsonPaths.length > 0 ? app.artifactJsonPaths : [];
-    console.log('Processing artifact JSON files:', artifactJsonPaths);
-    
-    for (const ajPath of artifactJsonPaths) {
-      const normAjPath = normalizePath(ajPath);
-      console.log('Attempting to fetch/update mule-artifact.json:', normAjPath, 'on branch', app.branch);
+    if (artifactJsonPaths && artifactJsonPaths.length > 0) {
+      console.log('Processing artifact JSON files:', artifactJsonPaths);
       
-      try {
-        const ajRes = await axios.get(
-          `https://api.github.com/repos/${repoPath}/contents/${normAjPath}?ref=${app.branch}`,
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
-        const ajSha = ajRes.data.sha;
-        const ajJson = JSON.parse(atob(ajRes.data.content.replace(/\n/g, '')));
+      for (const ajPath of artifactJsonPaths) {
+        const normAjPath = normalizePath(ajPath);
+        console.log('Attempting to fetch/update mule-artifact.json:', normAjPath, 'on branch', app.branch);
         
-        // Update Java version to latest
-        const latestJavaVersion = getLatestJavaVersion();
-        const updatedAj = { 
-          ...ajJson, 
-          javaSpecificationVersions: [latestJavaVersion],
-          migration: 'CloudHub 2.0' 
-        };
-        
-        await axios.put(
-          `https://api.github.com/repos/${repoPath}/contents/${normAjPath}`,
-          {
-            message: `Mule migration: update Java version for CloudHub 2.0 - ${normAjPath}`,
-            content: btoa(JSON.stringify(updatedAj, null, 2)),
-            branch: newBranch,
-            sha: ajSha
-          },
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
-        console.log('Successfully updated:', normAjPath);
-      } catch (error) {
-        console.error(`Failed to update ${normAjPath}:`, error);
-        // Continue with other files even if one fails
+        try {
+          const ajRes = await axios.get(
+            `https://api.github.com/repos/${repoPath}/contents/${normAjPath}?ref=${app.branch}`,
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          const ajSha = ajRes.data.sha;
+          const ajJson = JSON.parse(atob(ajRes.data.content.replace(/\n/g, '')));
+          
+          // Update Java version to latest
+          const latestJavaVersion = getLatestJavaVersion();
+          const updatedAj = { 
+            ...ajJson, 
+            javaSpecificationVersions: [latestJavaVersion],
+            migration: 'CloudHub 2.0' 
+          };
+          
+          await axios.put(
+            `https://api.github.com/repos/${repoPath}/contents/${normAjPath}`,
+            {
+              message: `Mule migration: update Java version for CloudHub 2.0 - ${normAjPath}`,
+              content: btoa(JSON.stringify(updatedAj, null, 2)),
+              branch: newBranch,
+              sha: ajSha
+            },
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          console.log('Successfully updated:', normAjPath);
+        } catch (error) {
+          console.error(`Failed to update ${normAjPath}:`, error);
+          // Continue with other files even if one fails
+        }
       }
+    } else {
+      console.log('No mule-artifact.json files found to update');
     }
     
     // 5. Update all src/main/*.xml files
-    const projectXmlPaths = app.projectXmlPaths && app.projectXmlPaths.length > 0 ? app.projectXmlPaths : [];
-    console.log('Processing project XML files:', projectXmlPaths);
-    
-    for (const xmlPath of projectXmlPaths) {
-      const normXmlPath = normalizePath(xmlPath);
-      console.log('Attempting to fetch/update project xml:', normXmlPath, 'on branch', app.branch);
+    if (projectXmlPaths && projectXmlPaths.length > 0) {
+      console.log('Processing project XML files:', projectXmlPaths);
       
-      try {
-        const xmlRes = await axios.get(
-          `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}?ref=${app.branch}`,
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
-        const xmlSha = xmlRes.data.sha;
-        const xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
-        const updatedXml = xmlContent + '\n<!-- Updated for CloudHub 2.0 migration -->';
+      for (const xmlPath of projectXmlPaths) {
+        const normXmlPath = normalizePath(xmlPath);
+        console.log('Attempting to fetch/update project xml:', normXmlPath, 'on branch', app.branch);
         
-        await axios.put(
-          `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}`,
-          {
-            message: `Mule migration: update for CloudHub 2.0 - ${normXmlPath}`,
-            content: btoa(updatedXml),
-            branch: newBranch,
-            sha: xmlSha
-          },
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
-        console.log('Successfully updated:', normXmlPath);
-      } catch (error) {
-        console.error(`Failed to update ${normXmlPath}:`, error);
-        // Continue with other files even if one fails
+        try {
+          const xmlRes = await axios.get(
+            `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}?ref=${app.branch}`,
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          const xmlSha = xmlRes.data.sha;
+          const xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
+          const updatedXml = xmlContent + '\n<!-- Updated for CloudHub 2.0 migration -->';
+          
+          await axios.put(
+            `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}`,
+            {
+              message: `Mule migration: update for CloudHub 2.0 - ${normXmlPath}`,
+              content: btoa(updatedXml),
+              branch: newBranch,
+              sha: xmlSha
+            },
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          console.log('Successfully updated:', normXmlPath);
+        } catch (error) {
+          console.error(`Failed to update ${normXmlPath}:`, error);
+          // Continue with other files even if one fails
+        }
       }
+    } else {
+      console.log('No project XML files found to update');
     }
     
     console.log('Migration completed for app:', app.applicationName);
