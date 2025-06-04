@@ -5,6 +5,7 @@ import Header from "@/components/Header";
 import Dashboard from "@/components/Dashboard";
 import Migration from "@/components/Migration";
 import Applications from "@/components/Applications";
+import LandingPage from "@/components/LandingPage";
 import AuthProvider, { useAuth } from "@/components/AuthProvider";
 import AuthPage from "@/pages/Auth";
 
@@ -23,7 +24,13 @@ const AppContent = () => {
   }
 
   if (!user) {
-    return <AuthPage />;
+    return (
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/auth" element={<AuthPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    );
   }
 
   return (
