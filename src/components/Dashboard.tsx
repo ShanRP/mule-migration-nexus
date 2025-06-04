@@ -31,6 +31,8 @@ interface MuleApplication {
   name: string;
   repository: string;
   branch: string;
+  applicationName: string;
+  muleRuntime: string;
   muleVersion: string;
   javaVersion: string;
   dependencies: MuleDependency[];
@@ -143,7 +145,7 @@ const Dashboard = () => {
         if (page > 10) break;
       }
 
-      const muleApps: any[] = [];
+      const muleApps: MuleApplication[] = [];
       for (const repo of allRepos) {
         try {
           // Recursively list all files in the repo
@@ -205,11 +207,12 @@ const Dashboard = () => {
               name: repo.name,
               repository: repo.html_url,
               branch: repo.default_branch,
+              applicationName,
+              muleRuntime,
               muleVersion,
               javaVersion,
               dependencies,
               connectors,
-              artifactJson,
               status: 'pending',
               lastUpdated: repo.updated_at
             });
