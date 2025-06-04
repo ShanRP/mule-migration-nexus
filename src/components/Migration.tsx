@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -44,10 +45,12 @@ const Migration = () => {
   const [fetchingRepos, setFetchingRepos] = useState(false);
   const [migrating, setMigrating] = useState(false);
 
-  const githubToken = selectedOrganization?.github_token || localStorage.getItem('MULE_githubToken') || '';
+  const repositoryType = selectedOrganization?.repository_type;
+  const githubToken = selectedOrganization?.github_token || '';
+  const azureToken = selectedOrganization?.azure_devops_token || '';
 
-  // Utility to fetch file content from GitHub
-  const fetchFileContent = async (repoFullName: string, filePath: string, token: string): Promise<string | null> => {
+  // GitHub file operations
+  const fetchGitHubFileContent = async (repoFullName: string, filePath: string, token: string): Promise<string | null> => {
     try {
       const response = await axios.get(
         `https://api.github.com/repos/${repoFullName}/contents/${filePath}`,
@@ -62,8 +65,7 @@ const Migration = () => {
     return null;
   };
 
-  // Utility: Recursively list all files in a repo
-  const listAllFiles = async (repoFullName: string, path: string, token: string): Promise<string[]> => {
+  const listAllGitHubFiles = async (repoFullName: string, path: string, token: string): Promise<string[]> => {
     let files: string[] = [];
     try {
       const res = await axios.get(
@@ -74,7 +76,7 @@ const Migration = () => {
         if (item.type === 'file') {
           files.push(item.path);
         } else if (item.type === 'dir') {
-          const subFiles = await listAllFiles(repoFullName, item.path, token);
+          const subFiles = await listAllGitHubFiles(repoFullName, item.path, token);
           files = files.concat(subFiles);
         }
       }
@@ -82,10 +84,229 @@ const Migration = () => {
     return files;
   };
 
-  // Fetch all repos and scan for Mule apps (robust)
+  // Azure DevOps file operations
+  const fetchAzureFileContent = async (organization: string, project: string, repoName: string, filePath: string, token: string): Promise<string | null> => {
+    try {
+      const response = await axios.get(
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=${filePath}&api-version=6.0`,
+        { 
+          headers: { 
+            Authorization: `Basic ${btoa(':' + token)}`,
+            'Content-Type': 'application/json'
+          } 
+        }
+      );
+      if (response.data) {
+        return response.data;
+      }
+    } catch (error) {
+      // File not found or access denied
+    }
+    return null;
+  };
+
+  const listAllAzureFiles = async (organization: string, project: string, repoName: string, path: string, token: string): Promise<string[]> => {
+    let files: string[] = [];
+    try {
+      const res = await axios.get(
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=${path}&recursionLevel=Full&api-version=6.0`,
+        { 
+          headers: { 
+            Authorization: `Basic ${btoa(':' + token)}`,
+            'Content-Type': 'application/json'
+          } 
+        }
+      );
+      if (res.data && res.data.value) {
+        files = res.data.value
+          .filter((item: any) => !item.isFolder)
+          .map((item: any) => item.path.substring(1)); // Remove leading slash
+      }
+    } catch (e) {}
+    return files;
+  };
+
+  // Scan GitHub repositories
+  const scanGitHubRepositories = async (token: string, orgName: string) => {
+    let allRepos = [];
+    let page = 1;
+    const perPage = 100;
+    while (true) {
+      const url = orgName
+        ? `https://api.github.com/orgs/${orgName}/repos?per_page=${perPage}&page=${page}`
+        : `https://api.github.com/user/repos?per_page=${perPage}&page=${page}`;
+      const reposRes = await axios.get(url, {
+        headers: { Authorization: `token ${token}` }
+      });
+      if (reposRes.data.length === 0) break;
+      allRepos.push(...reposRes.data);
+      page++;
+      if (page > 10) break;
+    }
+
+    const muleApps: any[] = [];
+    for (const repo of allRepos) {
+      try {
+        const allFiles = await listAllGitHubFiles(repo.full_name, '', token);
+        const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
+        for (const pomPath of pomFiles) {
+          const pomXml = await fetchGitHubFileContent(repo.full_name, pomPath, token);
+          if (!pomXml || !isMuleApplication(pomXml)) continue;
+          
+          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+          
+          let connectors: any[] = [];
+          try {
+            const muleDirPath = `${pomPath.substring(0, pomPath.lastIndexOf('/'))}/src/main/mule`;
+            const muleDir = await axios.get(
+              `https://api.github.com/repos/${repo.full_name}/contents/${muleDirPath}`,
+              { headers: { Authorization: `token ${token}` } }
+            );
+            if (muleDir.data && Array.isArray(muleDir.data)) {
+              for (const file of muleDir.data) {
+                if (file.name.endsWith('.xml')) {
+                  const xmlContent = await fetchGitHubFileContent(repo.full_name, file.path, token);
+                  if (xmlContent) {
+                    connectors = [...connectors, ...analyzeMuleConfiguration(xmlContent)];
+                  }
+                }
+              }
+            }
+          } catch {}
+          
+          let artifactJson = null;
+          try {
+            const artifactPath1 = `${pomPath.substring(0, pomPath.lastIndexOf('/'))}/mule-artifact.json`;
+            const artifactPath2 = `${pomPath.substring(0, pomPath.lastIndexOf('/'))}/src/main/resources/mule-artifact.json`;
+            const artifactContent = await fetchGitHubFileContent(repo.full_name, artifactPath1, token) ||
+              await fetchGitHubFileContent(repo.full_name, artifactPath2, token);
+            if (artifactContent) artifactJson = JSON.parse(artifactContent);
+          } catch {}
+          
+          muleApps.push({
+            id: `${repo.id}-${pomPath}`,
+            name: repo.name,
+            repository: repo.html_url,
+            branch: repo.default_branch,
+            muleVersion,
+            javaVersion,
+            dependencies,
+            connectors,
+            artifactJson,
+            status: 'pending',
+            lastUpdated: repo.updated_at,
+            applicationName,
+          });
+        }
+      } catch (error) {
+        // skip repo on error
+      }
+    }
+    return muleApps;
+  };
+
+  // Scan Azure DevOps repositories
+  const scanAzureRepositories = async (token: string, organization: string) => {
+    let allRepos = [];
+    try {
+      // First get all projects
+      const projectsRes = await axios.get(
+        `https://dev.azure.com/${organization}/_apis/projects?api-version=6.0`,
+        { 
+          headers: { 
+            Authorization: `Basic ${btoa(':' + token)}`,
+            'Content-Type': 'application/json'
+          } 
+        }
+      );
+      
+      // Then get repositories for each project
+      for (const project of projectsRes.data.value) {
+        try {
+          const reposRes = await axios.get(
+            `https://dev.azure.com/${organization}/${project.name}/_apis/git/repositories?api-version=6.0`,
+            { 
+              headers: { 
+                Authorization: `Basic ${btoa(':' + token)}`,
+                'Content-Type': 'application/json'
+              } 
+            }
+          );
+          
+          for (const repo of reposRes.data.value) {
+            allRepos.push({
+              ...repo,
+              project: project.name,
+              organization
+            });
+          }
+        } catch (error) {
+          console.log(`Error fetching repos for project ${project.name}:`, error);
+        }
+      }
+    } catch (error) {
+      console.log('Error fetching Azure DevOps projects:', error);
+      throw error;
+    }
+
+    const muleApps: any[] = [];
+    for (const repo of allRepos) {
+      try {
+        const allFiles = await listAllAzureFiles(organization, repo.project, repo.name, '', token);
+        const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
+        
+        for (const pomPath of pomFiles) {
+          const pomXml = await fetchAzureFileContent(organization, repo.project, repo.name, pomPath, token);
+          if (!pomXml || !isMuleApplication(pomXml)) continue;
+          
+          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+          
+          let connectors: any[] = [];
+          const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
+          const muleDirPath = `${pomDir}/src/main/mule`;
+          const muleFiles = allFiles.filter(f => f.startsWith(muleDirPath) && f.endsWith('.xml'));
+          for (const xmlFile of muleFiles) {
+            const xmlContent = await fetchAzureFileContent(organization, repo.project, repo.name, xmlFile, token);
+            if (xmlContent) {
+              connectors = [...connectors, ...analyzeMuleConfiguration(xmlContent)];
+            }
+          }
+          
+          let artifactJson = null;
+          try {
+            const artifactPath1 = `${pomDir}/mule-artifact.json`;
+            const artifactPath2 = `${pomDir}/src/main/resources/mule-artifact.json`;
+            const artifactContent = await fetchAzureFileContent(organization, repo.project, repo.name, artifactPath1, token) ||
+              await fetchAzureFileContent(organization, repo.project, repo.name, artifactPath2, token);
+            if (artifactContent) artifactJson = JSON.parse(artifactContent);
+          } catch {}
+          
+          muleApps.push({
+            id: `${repo.id}-${pomPath}`,
+            name: repo.name,
+            repository: repo.webUrl || `https://dev.azure.com/${organization}/${repo.project}/_git/${repo.name}`,
+            branch: repo.defaultBranch || 'main',
+            muleVersion,
+            javaVersion,
+            dependencies,
+            connectors,
+            artifactJson,
+            status: 'pending',
+            lastUpdated: new Date().toISOString(),
+            applicationName,
+          });
+        }
+      } catch (error) {
+        console.log(`Error processing Azure repo ${repo.name}:`, error);
+      }
+    }
+    return muleApps;
+  };
+
+  // Fetch all repos and scan for Mule apps
   const handleFetchRepositories = async () => {
-    if (!githubToken) {
-      toast.error('Please connect GitHub and provide a token in the Dashboard.');
+    if (!repositoryType || (!githubToken && !azureToken)) {
+      toast.error('Please connect to a source control provider in the Dashboard.');
       return;
     }
     setFetchingRepos(true);
@@ -93,82 +314,23 @@ const Migration = () => {
     setApplications([]);
 
     try {
-      const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
-      let allRepos = [];
-      let page = 1;
-      const perPage = 100;
-      while (true) {
-        const url = orgName
-          ? `https://api.github.com/orgs/${orgName}/repos?per_page=${perPage}&page=${page}`
-          : `https://api.github.com/user/repos?per_page=${perPage}&page=${page}`;
-        const reposRes = await axios.get(url, {
-          headers: { Authorization: `token ${githubToken}` }
-        });
-        if (reposRes.data.length === 0) break;
-        allRepos.push(...reposRes.data);
-        page++;
-        if (page > 10) break;
+      let muleApps: any[] = [];
+      
+      if (repositoryType === 'github' && githubToken) {
+        console.log('Scanning GitHub repositories...');
+        const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
+        muleApps = await scanGitHubRepositories(githubToken, orgName);
+      } else if (repositoryType === 'azure_devops' && azureToken) {
+        console.log('Scanning Azure DevOps repositories...');
+        const organization = selectedOrganization?.azure_devops_url?.split('/').pop() || 
+                           selectedOrganization?.azure_devops_url?.split('dev.azure.com/')[1]?.split('/')[0] || '';
+        if (!organization) {
+          toast.error('Please provide Azure DevOps organization URL');
+          return;
+        }
+        muleApps = await scanAzureRepositories(azureToken, organization);
       }
 
-      const muleApps: any[] = [];
-      for (const repo of allRepos) {
-        try {
-          // Recursively list all files in the repo
-          const allFiles = await listAllFiles(repo.full_name, '', githubToken);
-          const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
-          for (const pomPath of pomFiles) {
-            const pomXml = await fetchFileContent(repo.full_name, pomPath, githubToken);
-            if (!pomXml || !isMuleApplication(pomXml)) continue;
-            // Extract Mule info
-            const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
-            // If no connectors, try all .xml in src/main/mule (relative to pom.xml)
-            let connectors: any[] = [];
-            try {
-              const muleDirPath = `${pomPath.substring(0, pomPath.lastIndexOf('/'))}/src/main/mule`;
-              const muleDir = await axios.get(
-                `https://api.github.com/repos/${repo.full_name}/contents/${muleDirPath}`,
-                { headers: { Authorization: `token ${githubToken}` } }
-              );
-              if (muleDir.data && Array.isArray(muleDir.data)) {
-                for (const file of muleDir.data) {
-                  if (file.name.endsWith('.xml')) {
-                    const xmlContent = await fetchFileContent(repo.full_name, file.path, githubToken);
-                    if (xmlContent) {
-                      connectors = [...connectors, ...analyzeMuleConfiguration(xmlContent)];
-                    }
-                  }
-                }
-              }
-            } catch {}
-            // Try to fetch artifact.json for extra info (optional, relative to pom.xml)
-            let artifactJson = null;
-            try {
-              const artifactPath1 = `${pomPath.substring(0, pomPath.lastIndexOf('/'))}/mule-artifact.json`;
-              const artifactPath2 = `${pomPath.substring(0, pomPath.lastIndexOf('/'))}/src/main/resources/mule-artifact.json`;
-              const artifactContent = await fetchFileContent(repo.full_name, artifactPath1, githubToken) ||
-                await fetchFileContent(repo.full_name, artifactPath2, githubToken);
-              if (artifactContent) artifactJson = JSON.parse(artifactContent);
-            } catch {}
-            // Add to Mule apps
-            muleApps.push({
-              id: `${repo.id}-${pomPath}`,
-              name: repo.name,
-              repository: repo.html_url,
-              branch: repo.default_branch,
-              muleVersion,
-              javaVersion,
-              dependencies,
-              connectors,
-              artifactJson,
-              status: 'pending',
-              lastUpdated: repo.updated_at,
-              applicationName,
-            });
-          }
-        } catch (error) {
-          // skip repo on error
-        }
-      }
       setApplications(muleApps);
       if (muleApps.length > 0) {
         toast.success(`Found ${muleApps.length} Mule application(s)!`);
@@ -190,7 +352,137 @@ const Migration = () => {
     ));
   };
 
-  // Migrate selected apps: create branch, update pom.xml, commit
+  // GitHub migration
+  const migrateGitHubApplication = async (app: MuleApplication) => {
+    const repoPath = app.repository.replace('https://github.com/', '');
+    
+    const pomRes = await axios.get(
+      `https://api.github.com/repos/${repoPath}/contents/pom.xml`,
+      { headers: { Authorization: `token ${githubToken}` } }
+    );
+    const pomSha = pomRes.data.sha;
+    const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
+    const updatedPom = pomXml + '\n<!-- Updated for CloudHub 2.0 migration -->';
+    
+    const branchRes = await axios.get(
+      `https://api.github.com/repos/${repoPath}/git/refs/heads/${app.branch}`,
+      { headers: { Authorization: `token ${githubToken}` } }
+    );
+    const baseSha = branchRes.data.object.sha;
+    const newBranch = 'mulemigration';
+    
+    try {
+      await axios.post(
+        `https://api.github.com/repos/${repoPath}/git/refs`,
+        {
+          ref: `refs/heads/${newBranch}`,
+          sha: baseSha
+        },
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
+    } catch (e) {/* branch may already exist */}
+    
+    await axios.put(
+      `https://api.github.com/repos/${repoPath}/contents/pom.xml`,
+      {
+        message: 'Mule migration: update dependencies for CloudHub 2.0',
+        content: btoa(updatedPom),
+        branch: newBranch,
+        sha: pomSha
+      },
+      { headers: { Authorization: `token ${githubToken}` } }
+    );
+  };
+
+  // Azure DevOps migration
+  const migrateAzureApplication = async (app: MuleApplication) => {
+    const urlParts = app.repository.split('/');
+    const organization = urlParts[3];
+    const project = urlParts[4];
+    const repoName = urlParts[6];
+    
+    const repoRes = await axios.get(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}?api-version=6.0`,
+      { 
+        headers: { 
+          Authorization: `Basic ${btoa(':' + azureToken)}`,
+          'Content-Type': 'application/json'
+        } 
+      }
+    );
+    
+    const defaultBranchName = repoRes.data.defaultBranch.replace('refs/heads/', '');
+    
+    const commitsRes = await axios.get(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/commits?searchCriteria.itemVersion.version=${defaultBranchName}&$top=1&api-version=6.0`,
+      { 
+        headers: { 
+          Authorization: `Basic ${btoa(':' + azureToken)}`,
+          'Content-Type': 'application/json'
+        } 
+      }
+    );
+    const latestCommitId = commitsRes.data.value[0].commitId;
+    
+    const pomRes = await axios.get(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=pom.xml&api-version=6.0`,
+      { 
+        headers: { 
+          Authorization: `Basic ${btoa(':' + azureToken)}`,
+          'Content-Type': 'application/json'
+        } 
+      }
+    );
+    const pomXml = pomRes.data;
+    const updatedPom = pomXml + '\n<!-- Updated for CloudHub 2.0 migration -->';
+    
+    const newBranch = 'mulemigration';
+    try {
+      await axios.post(
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/refs?api-version=6.0`,
+        {
+          name: `refs/heads/${newBranch}`,
+          oldObjectId: '0000000000000000000000000000000000000000',
+          newObjectId: latestCommitId
+        },
+        { 
+          headers: { 
+            Authorization: `Basic ${btoa(':' + azureToken)}`,
+            'Content-Type': 'application/json'
+          } 
+        }
+      );
+    } catch (e) {/* branch may already exist */}
+    
+    await axios.post(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/pushes?api-version=6.0`,
+      {
+        refUpdates: [{
+          name: `refs/heads/${newBranch}`,
+          oldObjectId: latestCommitId
+        }],
+        commits: [{
+          comment: 'Mule migration: update dependencies for CloudHub 2.0',
+          changes: [{
+            changeType: 'edit',
+            item: { path: '/pom.xml' },
+            newContent: {
+              content: updatedPom,
+              contentType: 'rawtext'
+            }
+          }]
+        }]
+      },
+      { 
+        headers: { 
+          Authorization: `Basic ${btoa(':' + azureToken)}`,
+          'Content-Type': 'application/json'
+        } 
+      }
+    );
+  };
+
+  // Migrate selected apps
   const handleMigrateSelected = async () => {
     const selectedApps = applications.filter(app => app.selected);
     if (selectedApps.length === 0) {
@@ -200,44 +492,11 @@ const Migration = () => {
     setMigrating(true);
     try {
       for (const app of selectedApps) {
-        // 1. Get latest pom.xml SHA
-        const pomRes = await axios.get(
-          `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/contents/pom.xml`,
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
-        const pomSha = pomRes.data.sha;
-        const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
-        // 2. Update dependencies to latest (for demo, just append a comment)
-        const updatedPom = pomXml + '\n<!-- Updated for CloudHub 2.0 migration -->';
-        // 3. Create a new branch from default
-        const branchRes = await axios.get(
-          `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/git/refs/heads/${app.branch}`,
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
-        const baseSha = branchRes.data.object.sha;
-        const newBranch = 'mulemigration';
-        // Create branch (ignore if exists)
-        try {
-          await axios.post(
-            `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/git/refs`,
-            {
-              ref: `refs/heads/${newBranch}`,
-              sha: baseSha
-            },
-            { headers: { Authorization: `token ${githubToken}` } }
-          );
-        } catch (e) {/* branch may already exist */}
-        // 4. Commit updated pom.xml to new branch
-        await axios.put(
-          `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/contents/pom.xml`,
-          {
-            message: 'Mule migration: update dependencies for CloudHub 2.0',
-            content: btoa(updatedPom),
-            branch: newBranch,
-            sha: pomSha
-          },
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
+        if (repositoryType === 'github') {
+          await migrateGitHubApplication(app);
+        } else if (repositoryType === 'azure_devops') {
+          await migrateAzureApplication(app);
+        }
       }
       toast.success('Migration branch created and pom.xml updated for selected apps!');
     } catch (err) {
@@ -336,7 +595,9 @@ const Migration = () => {
                       <TableCell className="border border-gray-300">{app.applicationName}</TableCell>
                       <TableCell className="border border-gray-300">
                         <a href={app.repository} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                          {app.repository.split('/').slice(-2).join('/')}
+                          {repositoryType === 'github' 
+                            ? app.repository.split('/').slice(-2).join('/')
+                            : app.repository.split('/').slice(-1)[0]}
                         </a>
                       </TableCell>
                       <TableCell className="border border-gray-300">

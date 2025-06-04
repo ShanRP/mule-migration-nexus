@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -54,12 +55,161 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
   const [migrating, setMigrating] = React.useState(false);
   const [selectedApp, setSelectedApp] = useState<MuleApplication | null>(null);
 
+  const repositoryType = selectedOrganization?.repository_type;
   const githubToken = selectedOrganization?.github_token || '';
+  const azureToken = selectedOrganization?.azure_devops_token || '';
 
   const toggleApplicationSelection = (appId: string) => {
     setApplications(prev => prev.map(app => 
       app.id === appId ? { ...app, selected: !app.selected } : app
     ));
+  };
+
+  const migrateGitHubApplication = async (app: MuleApplication) => {
+    const repoPath = app.repository.replace('https://github.com/', '');
+    
+    // Get latest pom.xml SHA
+    const pomRes = await axios.get(
+      `https://api.github.com/repos/${repoPath}/contents/pom.xml`,
+      { headers: { Authorization: `token ${githubToken}` } }
+    );
+    const pomSha = pomRes.data.sha;
+    const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
+    
+    // Update dependencies to latest (for demo, just append a comment)
+    const updatedPom = pomXml + '\n<!-- Updated for CloudHub 2.0 migration -->';
+    
+    // Create a new branch from default
+    const branchRes = await axios.get(
+      `https://api.github.com/repos/${repoPath}/git/refs/heads/${app.branch}`,
+      { headers: { Authorization: `token ${githubToken}` } }
+    );
+    const baseSha = branchRes.data.object.sha;
+    const newBranch = 'mulemigration';
+    
+    // Create branch (ignore if exists)
+    try {
+      await axios.post(
+        `https://api.github.com/repos/${repoPath}/git/refs`,
+        {
+          ref: `refs/heads/${newBranch}`,
+          sha: baseSha
+        },
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
+    } catch (e) {
+      // Branch may already exist
+    }
+    
+    // Commit updated pom.xml to new branch
+    await axios.put(
+      `https://api.github.com/repos/${repoPath}/contents/pom.xml`,
+      {
+        message: 'Mule migration: update dependencies for CloudHub 2.0',
+        content: btoa(updatedPom),
+        branch: newBranch,
+        sha: pomSha
+      },
+      { headers: { Authorization: `token ${githubToken}` } }
+    );
+  };
+
+  const migrateAzureApplication = async (app: MuleApplication) => {
+    // Extract organization, project, and repo name from repository URL
+    const urlParts = app.repository.split('/');
+    const organization = urlParts[3]; // dev.azure.com/{org}
+    const project = urlParts[4];
+    const repoName = urlParts[6];
+    
+    // Get the repository details
+    const repoRes = await axios.get(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}?api-version=6.0`,
+      { 
+        headers: { 
+          Authorization: `Basic ${btoa(':' + azureToken)}`,
+          'Content-Type': 'application/json'
+        } 
+      }
+    );
+    
+    // Get the default branch
+    const defaultBranchName = repoRes.data.defaultBranch.replace('refs/heads/', '');
+    
+    // Get latest commit from default branch
+    const commitsRes = await axios.get(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/commits?searchCriteria.itemVersion.version=${defaultBranchName}&$top=1&api-version=6.0`,
+      { 
+        headers: { 
+          Authorization: `Basic ${btoa(':' + azureToken)}`,
+          'Content-Type': 'application/json'
+        } 
+      }
+    );
+    const latestCommitId = commitsRes.data.value[0].commitId;
+    
+    // Get pom.xml content
+    const pomRes = await axios.get(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=pom.xml&api-version=6.0`,
+      { 
+        headers: { 
+          Authorization: `Basic ${btoa(':' + azureToken)}`,
+          'Content-Type': 'application/json'
+        } 
+      }
+    );
+    const pomXml = pomRes.data;
+    
+    // Update dependencies (for demo, just append a comment)
+    const updatedPom = pomXml + '\n<!-- Updated for CloudHub 2.0 migration -->';
+    
+    // Create new branch
+    const newBranch = 'mulemigration';
+    try {
+      await axios.post(
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/refs?api-version=6.0`,
+        {
+          name: `refs/heads/${newBranch}`,
+          oldObjectId: '0000000000000000000000000000000000000000',
+          newObjectId: latestCommitId
+        },
+        { 
+          headers: { 
+            Authorization: `Basic ${btoa(':' + azureToken)}`,
+            'Content-Type': 'application/json'
+          } 
+        }
+      );
+    } catch (e) {
+      // Branch may already exist
+    }
+    
+    // Push updated pom.xml to new branch
+    await axios.post(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/pushes?api-version=6.0`,
+      {
+        refUpdates: [{
+          name: `refs/heads/${newBranch}`,
+          oldObjectId: latestCommitId
+        }],
+        commits: [{
+          comment: 'Mule migration: update dependencies for CloudHub 2.0',
+          changes: [{
+            changeType: 'edit',
+            item: { path: '/pom.xml' },
+            newContent: {
+              content: updatedPom,
+              contentType: 'rawtext'
+            }
+          }]
+        }]
+      },
+      { 
+        headers: { 
+          Authorization: `Basic ${btoa(':' + azureToken)}`,
+          'Content-Type': 'application/json'
+        } 
+      }
+    );
   };
 
   const handleMigrateSelected = async () => {
@@ -72,53 +222,15 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     setMigrating(true);
     try {
       for (const app of selectedApps) {
-        // Get latest pom.xml SHA
-        const pomRes = await axios.get(
-          `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/contents/pom.xml`,
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
-        const pomSha = pomRes.data.sha;
-        const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
-        
-        // Update dependencies to latest (for demo, just append a comment)
-        const updatedPom = pomXml + '\n<!-- Updated for CloudHub 2.0 migration -->';
-        
-        // Create a new branch from default
-        const branchRes = await axios.get(
-          `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/git/refs/heads/${app.branch}`,
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
-        const baseSha = branchRes.data.object.sha;
-        const newBranch = 'mulemigration';
-        
-        // Create branch (ignore if exists)
-        try {
-          await axios.post(
-            `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/git/refs`,
-            {
-              ref: `refs/heads/${newBranch}`,
-              sha: baseSha
-            },
-            { headers: { Authorization: `token ${githubToken}` } }
-          );
-        } catch (e) {
-          // Branch may already exist
+        if (repositoryType === 'github') {
+          await migrateGitHubApplication(app);
+        } else if (repositoryType === 'azure_devops') {
+          await migrateAzureApplication(app);
         }
-        
-        // Commit updated pom.xml to new branch
-        await axios.put(
-          `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/contents/pom.xml`,
-          {
-            message: 'Mule migration: update dependencies for CloudHub 2.0',
-            content: btoa(updatedPom),
-            branch: newBranch,
-            sha: pomSha
-          },
-          { headers: { Authorization: `token ${githubToken}` } }
-        );
       }
       toast.success('Migration branch created and pom.xml updated for selected apps!');
     } catch (err) {
+      console.error('Migration error:', err);
       toast.error('Migration failed. Please check your token and repo permissions.');
     } finally {
       setMigrating(false);
@@ -202,7 +314,9 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
                         rel="noopener noreferrer" 
                         className="text-blue-600 hover:underline text-sm flex items-center"
                       >
-                        {app.repository.split('/').slice(-2).join('/')}
+                        {repositoryType === 'github' 
+                          ? app.repository.split('/').slice(-2).join('/')
+                          : app.repository.split('/').slice(-1)[0]}
                         <ExternalLink className="h-3 w-3 ml-1" />
                       </a>
                     </TableCell>

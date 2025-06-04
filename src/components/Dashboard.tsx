@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -79,9 +80,9 @@ const Dashboard = () => {
     setConnecting(null);
   };
 
-  const fetchFileContent = async (repoFullName: string, filePath: string, token: string): Promise<string | null> => {
+  const fetchGitHubFileContent = async (repoFullName: string, filePath: string, token: string): Promise<string | null> => {
     try {
-      console.log(`Fetching ${filePath} from ${repoFullName}`);
+      console.log(`Fetching ${filePath} from GitHub repo ${repoFullName}`);
       const response = await axios.get(
         `https://api.github.com/repos/${repoFullName}/contents/${filePath}`,
         { headers: { Authorization: `token ${token}` } }
@@ -98,8 +99,30 @@ const Dashboard = () => {
     return null;
   };
 
-  // Utility: Recursively list all files in a repo
-  const listAllFiles = async (repoFullName: string, path: string, token: string): Promise<string[]> => {
+  const fetchAzureFileContent = async (organization: string, project: string, repoName: string, filePath: string, token: string): Promise<string | null> => {
+    try {
+      console.log(`Fetching ${filePath} from Azure DevOps repo ${organization}/${project}/${repoName}`);
+      const response = await axios.get(
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=${filePath}&api-version=6.0`,
+        { 
+          headers: { 
+            Authorization: `Basic ${btoa(':' + token)}`,
+            'Content-Type': 'application/json'
+          } 
+        }
+      );
+      
+      if (response.data) {
+        console.log(`Successfully fetched ${filePath} (${response.data.length} characters)`);
+        return response.data;
+      }
+    } catch (error) {
+      console.log(`Could not fetch ${filePath} from Azure DevOps repo:`, error);
+    }
+    return null;
+  };
+
+  const listAllGitHubFiles = async (repoFullName: string, path: string, token: string): Promise<string[]> => {
     let files: string[] = [];
     try {
       const res = await axios.get(
@@ -110,7 +133,7 @@ const Dashboard = () => {
         if (item.type === 'file') {
           files.push(item.path);
         } else if (item.type === 'dir') {
-          const subFiles = await listAllFiles(repoFullName, item.path, token);
+          const subFiles = await listAllGitHubFiles(repoFullName, item.path, token);
           files = files.concat(subFiles);
         }
       }
@@ -118,109 +141,249 @@ const Dashboard = () => {
     return files;
   };
 
+  const listAllAzureFiles = async (organization: string, project: string, repoName: string, path: string, token: string): Promise<string[]> => {
+    let files: string[] = [];
+    try {
+      const res = await axios.get(
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoName}/items?path=${path}&recursionLevel=Full&api-version=6.0`,
+        { 
+          headers: { 
+            Authorization: `Basic ${btoa(':' + token)}`,
+            'Content-Type': 'application/json'
+          } 
+        }
+      );
+      if (res.data && res.data.value) {
+        files = res.data.value
+          .filter((item: any) => !item.isFolder)
+          .map((item: any) => item.path.substring(1)); // Remove leading slash
+      }
+    } catch (e) {}
+    return files;
+  };
+
+  const scanGitHubRepositories = async (token: string, orgName: string) => {
+    let allRepos = [];
+    let page = 1;
+    const perPage = 100;
+    while (true) {
+      const url = orgName
+        ? `https://api.github.com/orgs/${orgName}/repos?per_page=${perPage}&page=${page}`
+        : `https://api.github.com/user/repos?per_page=${perPage}&page=${page}`;
+      const reposRes = await axios.get(url, {
+        headers: { Authorization: `token ${token}` }
+      });
+      if (reposRes.data.length === 0) break;
+      allRepos.push(...reposRes.data);
+      page++;
+      if (page > 10) break;
+    }
+
+    const muleApps: MuleApplication[] = [];
+    for (const repo of allRepos) {
+      try {
+        const allFiles = await listAllGitHubFiles(repo.full_name, '', token);
+        const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
+        for (const pomPath of pomFiles) {
+          const pomXml = await fetchGitHubFileContent(repo.full_name, pomPath, token);
+          if (!pomXml || !isMuleApplication(pomXml)) continue;
+          
+          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+          
+          let connectors: any[] = [];
+          const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
+          const configPaths = [
+            `${pomDir}/src/main/mule/mule-configuration.xml`,
+            `${pomDir}/src/main/app/mule-configuration.xml`,
+            `${pomDir}/src/main/resources/mule-configuration.xml`,
+            `${pomDir}/mule-configuration.xml`
+          ];
+          for (const configPath of configPaths) {
+            const configXml = await fetchGitHubFileContent(repo.full_name, configPath, token);
+            if (configXml) {
+              connectors = analyzeMuleConfiguration(configXml);
+              break;
+            }
+          }
+          
+          if (connectors.length === 0) {
+            try {
+              const muleDirPath = `${pomDir}/src/main/mule`;
+              const muleDir = await axios.get(
+                `https://api.github.com/repos/${repo.full_name}/contents/${muleDirPath}`,
+                { headers: { Authorization: `token ${token}` } }
+              );
+              if (muleDir.data && Array.isArray(muleDir.data)) {
+                for (const file of muleDir.data) {
+                  if (file.name.endsWith('.xml')) {
+                    const xmlContent = await fetchGitHubFileContent(repo.full_name, file.path, token);
+                    if (xmlContent) {
+                      connectors = [...connectors, ...analyzeMuleConfiguration(xmlContent)];
+                    }
+                  }
+                }
+              }
+            } catch {}
+          }
+          
+          muleApps.push({
+            id: `${repo.id}-${pomPath}`,
+            name: repo.name,
+            repository: repo.html_url,
+            branch: repo.default_branch,
+            applicationName,
+            muleRuntime,
+            muleVersion,
+            javaVersion,
+            dependencies,
+            connectors,
+            status: 'pending',
+            lastUpdated: repo.updated_at
+          });
+        }
+      } catch (error) {
+        // skip repo on error
+      }
+    }
+    return muleApps;
+  };
+
+  const scanAzureRepositories = async (token: string, organization: string) => {
+    let allRepos = [];
+    try {
+      // First get all projects
+      const projectsRes = await axios.get(
+        `https://dev.azure.com/${organization}/_apis/projects?api-version=6.0`,
+        { 
+          headers: { 
+            Authorization: `Basic ${btoa(':' + token)}`,
+            'Content-Type': 'application/json'
+          } 
+        }
+      );
+      
+      // Then get repositories for each project
+      for (const project of projectsRes.data.value) {
+        try {
+          const reposRes = await axios.get(
+            `https://dev.azure.com/${organization}/${project.name}/_apis/git/repositories?api-version=6.0`,
+            { 
+              headers: { 
+                Authorization: `Basic ${btoa(':' + token)}`,
+                'Content-Type': 'application/json'
+              } 
+            }
+          );
+          
+          for (const repo of reposRes.data.value) {
+            allRepos.push({
+              ...repo,
+              project: project.name,
+              organization
+            });
+          }
+        } catch (error) {
+          console.log(`Error fetching repos for project ${project.name}:`, error);
+        }
+      }
+    } catch (error) {
+      console.log('Error fetching Azure DevOps projects:', error);
+      throw error;
+    }
+
+    const muleApps: MuleApplication[] = [];
+    for (const repo of allRepos) {
+      try {
+        const allFiles = await listAllAzureFiles(organization, repo.project, repo.name, '', token);
+        const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
+        
+        for (const pomPath of pomFiles) {
+          const pomXml = await fetchAzureFileContent(organization, repo.project, repo.name, pomPath, token);
+          if (!pomXml || !isMuleApplication(pomXml)) continue;
+          
+          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+          
+          let connectors: any[] = [];
+          const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
+          const configPaths = [
+            `${pomDir}/src/main/mule/mule-configuration.xml`,
+            `${pomDir}/src/main/app/mule-configuration.xml`,
+            `${pomDir}/src/main/resources/mule-configuration.xml`,
+            `${pomDir}/mule-configuration.xml`
+          ];
+          
+          for (const configPath of configPaths) {
+            const configXml = await fetchAzureFileContent(organization, repo.project, repo.name, configPath, token);
+            if (configXml) {
+              connectors = analyzeMuleConfiguration(configXml);
+              break;
+            }
+          }
+          
+          if (connectors.length === 0) {
+            const muleDirPath = `${pomDir}/src/main/mule`;
+            const muleFiles = allFiles.filter(f => f.startsWith(muleDirPath) && f.endsWith('.xml'));
+            for (const xmlFile of muleFiles) {
+              const xmlContent = await fetchAzureFileContent(organization, repo.project, repo.name, xmlFile, token);
+              if (xmlContent) {
+                connectors = [...connectors, ...analyzeMuleConfiguration(xmlContent)];
+              }
+            }
+          }
+          
+          muleApps.push({
+            id: `${repo.id}-${pomPath}`,
+            name: repo.name,
+            repository: repo.webUrl || `https://dev.azure.com/${organization}/${repo.project}/_git/${repo.name}`,
+            branch: repo.defaultBranch || 'main',
+            applicationName,
+            muleRuntime,
+            muleVersion,
+            javaVersion,
+            dependencies,
+            connectors,
+            status: 'pending',
+            lastUpdated: new Date().toISOString()
+          });
+        }
+      } catch (error) {
+        console.log(`Error processing Azure repo ${repo.name}:`, error);
+      }
+    }
+    return muleApps;
+  };
+
   const handleScanRepositories = async () => {
-    const token = selectedOrganization?.github_token || githubToken.trim();
-    if (!token) {
-      toast.error('Please connect GitHub and provide a token first.');
+    const repositoryType = selectedOrganization?.repository_type;
+    const githubToken = selectedOrganization?.github_token;
+    const azureToken = selectedOrganization?.azure_devops_token;
+    
+    if (!repositoryType || (!githubToken && !azureToken)) {
+      toast.error('Please connect to a source control provider first.');
       return;
     }
+
     setFetchingRepos(true);
     setApplications([]);
 
     try {
-      const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
-      let allRepos = [];
-      let page = 1;
-      const perPage = 100;
-      while (true) {
-        const url = orgName
-          ? `https://api.github.com/orgs/${orgName}/repos?per_page=${perPage}&page=${page}`
-          : `https://api.github.com/user/repos?per_page=${perPage}&page=${page}`;
-        const reposRes = await axios.get(url, {
-          headers: { Authorization: `token ${token}` }
-        });
-        if (reposRes.data.length === 0) break;
-        allRepos.push(...reposRes.data);
-        page++;
-        if (page > 10) break;
+      let muleApps: MuleApplication[] = [];
+      
+      if (repositoryType === 'github' && githubToken) {
+        console.log('Scanning GitHub repositories...');
+        const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
+        muleApps = await scanGitHubRepositories(githubToken, orgName);
+      } else if (repositoryType === 'azure_devops' && azureToken) {
+        console.log('Scanning Azure DevOps repositories...');
+        const organization = selectedOrganization?.azure_devops_url?.split('/').pop() || 
+                           selectedOrganization?.azure_devops_url?.split('dev.azure.com/')[1]?.split('/')[0] || '';
+        if (!organization) {
+          toast.error('Please provide Azure DevOps organization URL');
+          return;
+        }
+        muleApps = await scanAzureRepositories(azureToken, organization);
       }
 
-      const muleApps: MuleApplication[] = [];
-      for (const repo of allRepos) {
-        try {
-          // Recursively list all files in the repo
-          const allFiles = await listAllFiles(repo.full_name, '', token);
-          const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
-          for (const pomPath of pomFiles) {
-            const pomXml = await fetchFileContent(repo.full_name, pomPath, token);
-            if (!pomXml || !isMuleApplication(pomXml)) continue;
-            // Extract Mule info
-            const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
-            // Try to find connectors from config files (relative to pom.xml location)
-            let connectors: any[] = [];
-            const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
-            const configPaths = [
-              `${pomDir}/src/main/mule/mule-configuration.xml`,
-              `${pomDir}/src/main/app/mule-configuration.xml`,
-              `${pomDir}/src/main/resources/mule-configuration.xml`,
-              `${pomDir}/mule-configuration.xml`
-            ];
-            for (const configPath of configPaths) {
-              const configXml = await fetchFileContent(repo.full_name, configPath, token);
-              if (configXml) {
-                connectors = analyzeMuleConfiguration(configXml);
-                break;
-              }
-            }
-            // If no connectors, try all .xml in src/main/mule (relative to pom.xml)
-            if (connectors.length === 0) {
-              try {
-                const muleDirPath = `${pomDir}/src/main/mule`;
-                const muleDir = await axios.get(
-                  `https://api.github.com/repos/${repo.full_name}/contents/${muleDirPath}`,
-                  { headers: { Authorization: `token ${token}` } }
-                );
-                if (muleDir.data && Array.isArray(muleDir.data)) {
-                  for (const file of muleDir.data) {
-                    if (file.name.endsWith('.xml')) {
-                      const xmlContent = await fetchFileContent(repo.full_name, file.path, token);
-                      if (xmlContent) {
-                        connectors = [...connectors, ...analyzeMuleConfiguration(xmlContent)];
-                      }
-                    }
-                  }
-                }
-              } catch {}
-            }
-            // Try to fetch artifact.json for extra info (optional, relative to pom.xml)
-            let artifactJson = null;
-            try {
-              const artifactPath1 = `${pomDir}/mule-artifact.json`;
-              const artifactPath2 = `${pomDir}/src/main/resources/mule-artifact.json`;
-              const artifactContent = await fetchFileContent(repo.full_name, artifactPath1, token) ||
-                await fetchFileContent(repo.full_name, artifactPath2, token);
-              if (artifactContent) artifactJson = JSON.parse(artifactContent);
-            } catch {}
-            // Add to Mule apps
-            muleApps.push({
-              id: `${repo.id}-${pomPath}`,
-              name: repo.name,
-              repository: repo.html_url,
-              branch: repo.default_branch,
-              applicationName,
-              muleRuntime,
-              muleVersion,
-              javaVersion,
-              dependencies,
-              connectors,
-              status: 'pending',
-              lastUpdated: repo.updated_at
-            });
-          }
-        } catch (error) {
-          // skip repo on error
-        }
-      }
       setApplications(muleApps);
       setShowRepositories(true);
       if (muleApps.length > 0) {
@@ -229,6 +392,7 @@ const Dashboard = () => {
         toast.info('No Mule applications found in your repositories.');
       }
     } catch (err) {
+      console.error('Repository scanning error:', err);
       toast.error('Failed to fetch repositories. Please check your token and permissions.');
     } finally {
       setFetchingRepos(false);
