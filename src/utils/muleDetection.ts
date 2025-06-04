@@ -64,6 +64,7 @@ export const isMuleApplication = (pomXml: string): boolean => {
 
 export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
   console.log('Extracting Mule information...');
+  console.log('Artifact JSON received:', artifactJson);
 
   // Application name: get the first <name> tag that is a direct child of <project>
   let applicationName = 'Unknown';
@@ -86,33 +87,75 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
     muleVersion = muleVersionMatch[1];
   }
 
-  // Java version from artifactJson (robust extraction)
+  // Enhanced Java version extraction from artifactJson
   let javaVersion = 'Unknown';
   if (artifactJson) {
-    // Check common keys and nested structures
-    if (Array.isArray(artifactJson['javaSpecificationVersions']) && artifactJson['javaSpecificationVersions'].length > 0) {
-      javaVersion = artifactJson['javaSpecificationVersions'][0];
-    } else if (artifactJson['javaversion']) {
-      javaVersion = artifactJson['javaversion'];
-    } else if (artifactJson['javaVersion']) {
-      javaVersion = artifactJson['javaVersion'];
-    } else if (artifactJson['java']) {
-      javaVersion = artifactJson['java'];
-    } else {
-      // Try case-insensitive and nested keys
-      for (const key of Object.keys(artifactJson)) {
-        if (key.toLowerCase().includes('java')) {
-          if (typeof artifactJson[key] === 'string') {
-            javaVersion = artifactJson[key];
+    console.log('Processing artifact JSON for Java version:', artifactJson);
+    
+    try {
+      // Handle both parsed object and string versions
+      let jsonObj = artifactJson;
+      if (typeof artifactJson === 'string') {
+        jsonObj = JSON.parse(artifactJson);
+      }
+      
+      console.log('Parsed JSON object:', jsonObj);
+      
+      // Check various possible keys for Java version
+      const javaKeys = [
+        'javaSpecificationVersions',
+        'javaSpecificationVersion', 
+        'javaversion',
+        'javaVersion',
+        'java',
+        'javaSpecification',
+        'jvm',
+        'jvmVersion'
+      ];
+      
+      for (const key of javaKeys) {
+        if (jsonObj[key]) {
+          console.log(`Found Java version under key '${key}':`, jsonObj[key]);
+          
+          if (Array.isArray(jsonObj[key]) && jsonObj[key].length > 0) {
+            javaVersion = String(jsonObj[key][0]);
+            console.log(`Extracted Java version from array: ${javaVersion}`);
             break;
-          } else if (Array.isArray(artifactJson[key]) && artifactJson[key].length > 0) {
-            javaVersion = artifactJson[key][0];
+          } else if (typeof jsonObj[key] === 'string' || typeof jsonObj[key] === 'number') {
+            javaVersion = String(jsonObj[key]);
+            console.log(`Extracted Java version directly: ${javaVersion}`);
             break;
           }
         }
       }
+      
+      // If still unknown, search case-insensitively through all keys
+      if (javaVersion === 'Unknown') {
+        console.log('Searching case-insensitively for Java version...');
+        for (const [key, value] of Object.entries(jsonObj)) {
+          if (key.toLowerCase().includes('java')) {
+            console.log(`Found potential Java key: ${key} with value:`, value);
+            if (Array.isArray(value) && value.length > 0) {
+              javaVersion = String(value[0]);
+              console.log(`Extracted Java version from case-insensitive search: ${javaVersion}`);
+              break;
+            } else if (typeof value === 'string' || typeof value === 'number') {
+              javaVersion = String(value);
+              console.log(`Extracted Java version from case-insensitive search: ${javaVersion}`);
+              break;
+            }
+          }
+        }
+      }
+      
+    } catch (error) {
+      console.error('Error parsing artifact JSON:', error);
     }
+  } else {
+    console.log('No artifact JSON provided for Java version extraction');
   }
+  
+  console.log(`Final extracted Java version: ${javaVersion}`);
 
   // Dependencies (as before)
   const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
@@ -144,6 +187,7 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
       };
     });
 
+  console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies });
   return { applicationName, muleRuntime, muleVersion, javaVersion, dependencies };
 };
 

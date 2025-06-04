@@ -129,6 +129,46 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     return { pomPaths, artifactJsonPaths, projectXmlPaths };
   };
 
+  // Helper function to update dependency versions in POM XML
+  const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[]): string => {
+    let updatedPom = pomXml;
+    
+    // Update app.runtime version
+    const latestMuleVersion = getLatestMuleVersion();
+    updatedPom = updatedPom.replace(
+      /<app\.runtime>.*?<\/app\.runtime>/g,
+      `<app.runtime>${latestMuleVersion}</app.runtime>`
+    );
+    
+    // Update mule.maven.plugin.version if present
+    updatedPom = updatedPom.replace(
+      /<mule\.maven\.plugin\.version>.*?<\/mule\.maven\.plugin\.version>/g,
+      `<mule.maven.plugin.version>4.9.0</mule.maven.plugin.version>`
+    );
+    
+    // Update each dependency to its latest version
+    dependencies.forEach(dep => {
+      if (dep.latestVersion && dep.latestVersion !== dep.version) {
+        console.log(`Updating ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
+        
+        // Create a regex to find and update the specific dependency
+        const dependencyRegex = new RegExp(
+          `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
+          'g'
+        );
+        
+        updatedPom = updatedPom.replace(dependencyRegex, `$1${dep.latestVersion}$2`);
+      }
+    });
+    
+    // Add migration comment
+    if (!updatedPom.includes('<!-- Updated for CloudHub 2.0 migration -->')) {
+      updatedPom = updatedPom + '\n<!-- Updated for CloudHub 2.0 migration -->';
+    }
+    
+    return updatedPom;
+  };
+
   const migrateGitHubApplication = async (app: MuleApplication) => {
     console.log('Starting migration for app:', app.applicationName);
     console.log('App file paths:', {
@@ -190,7 +230,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
       console.log('Branch may already exist, continuing...');
     }
     
-    // 3. Update all pom.xml files
+    // 3. Update all pom.xml files with dependency version updates
     if (pomPaths && pomPaths.length > 0) {
       console.log('Processing POM files:', pomPaths);
       
@@ -206,24 +246,8 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           const pomSha = pomRes.data.sha;
           const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
           
-          // Update Mule runtime version in pom.xml
-          let updatedPom = pomXml;
-          
-          // Update app.runtime version
-          const latestMuleVersion = getLatestMuleVersion();
-          updatedPom = updatedPom.replace(
-            /<app\.runtime>.*?<\/app\.runtime>/g,
-            `<app.runtime>${latestMuleVersion}</app.runtime>`
-          );
-          
-          // Update mule.maven.plugin.version if present
-          updatedPom = updatedPom.replace(
-            /<mule\.maven\.plugin\.version>.*?<\/mule\.maven\.plugin\.version>/g,
-            `<mule.maven.plugin.version>4.9.0</mule.maven.plugin.version>`
-          );
-          
-          // Add migration comment
-          updatedPom = updatedPom + '\n<!-- Updated for CloudHub 2.0 migration -->';
+          // Update POM with proper dependency version updates
+          const updatedPom = updatePomDependencies(pomXml, app.dependencies);
           
           await axios.put(
             `https://api.github.com/repos/${repoPath}/contents/${normPomPath}`,

@@ -40,6 +40,9 @@ interface MuleApplication {
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   lastUpdated: string;
   selected?: boolean;
+  pomPaths?: string[];
+  artifactJsonPaths?: string[];
+  projectXmlPaths?: string[];
 }
 
 const Dashboard = () => {
@@ -189,14 +192,52 @@ const Dashboard = () => {
       try {
         const allFiles = await listAllGitHubFiles(repo.full_name, '', token);
         const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
+        const artifactJsonFiles = allFiles.filter(f => f.endsWith('mule-artifact.json'));
+        const projectXmlFiles = allFiles.filter(f => f.endsWith('.xml') && f.includes('src/main/mule/'));
+        
         for (const pomPath of pomFiles) {
           const pomXml = await fetchGitHubFileContent(repo.full_name, pomPath, token);
           if (!pomXml || !isMuleApplication(pomXml)) continue;
           
-          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+          // Find corresponding mule-artifact.json file
+          const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
+          const artifactJsonPath = `${pomDir}/src/main/mule/mule-artifact.json`;
+          let artifactJson = null;
+          
+          console.log(`Looking for artifact JSON at: ${artifactJsonPath}`);
+          const artifactJsonContent = await fetchGitHubFileContent(repo.full_name, artifactJsonPath, token);
+          if (artifactJsonContent) {
+            try {
+              artifactJson = JSON.parse(artifactJsonContent);
+              console.log('Successfully parsed artifact JSON:', artifactJson);
+            } catch (error) {
+              console.log('Error parsing artifact JSON:', error);
+            }
+          } else {
+            // Try alternative paths
+            const altPaths = [
+              `${pomDir}/mule-artifact.json`,
+              `${pomDir}/src/main/resources/mule-artifact.json`
+            ];
+            
+            for (const altPath of altPaths) {
+              console.log(`Trying alternative path: ${altPath}`);
+              const altContent = await fetchGitHubFileContent(repo.full_name, altPath, token);
+              if (altContent) {
+                try {
+                  artifactJson = JSON.parse(altContent);
+                  console.log('Successfully parsed artifact JSON from alternative path:', artifactJson);
+                  break;
+                } catch (error) {
+                  console.log('Error parsing artifact JSON from alternative path:', error);
+                }
+              }
+            }
+          }
+          
+          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml, artifactJson);
           
           let connectors: any[] = [];
-          const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
           const configPaths = [
             `${pomDir}/src/main/mule/mule-configuration.xml`,
             `${pomDir}/src/main/app/mule-configuration.xml`,
@@ -243,7 +284,10 @@ const Dashboard = () => {
             dependencies,
             connectors,
             status: 'pending',
-            lastUpdated: repo.updated_at
+            lastUpdated: repo.updated_at,
+            pomPaths: [pomPath],
+            artifactJsonPaths: artifactJsonFiles.filter(f => f.startsWith(pomDir)),
+            projectXmlPaths: projectXmlFiles.filter(f => f.startsWith(pomDir))
           });
         }
       } catch (error) {
