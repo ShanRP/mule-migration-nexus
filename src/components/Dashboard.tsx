@@ -107,22 +107,30 @@ const Dashboard = () => {
     return null;
   };
 
+  // Updated Azure DevOps file content fetching with CORS-safe approach
   const fetchAzureFileContent = async (organization: string, project: string, repoId: string, filePath: string, token: string): Promise<string | null> => {
     try {
       console.log(`Fetching ${filePath} from Azure DevOps repo ${organization}/${project}/${repoId}`);
-      const response = await axios.get(
-        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoId}/items?path=/${filePath}&api-version=6.0`,
-        { 
-          headers: { 
-            Authorization: `Basic ${btoa(':' + token)}`,
-            'Content-Type': 'application/json'
-          } 
-        }
-      );
       
-      if (response.data) {
-        console.log(`Successfully fetched ${filePath} (${response.data.length} characters)`);
-        return response.data;
+      // Create a CORS-safe request using a proxy approach
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoId}/items?path=/${filePath}&api-version=6.0`
+      )}`;
+      
+      const response = await fetch(proxyUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Basic ${btoa(':' + token)}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const content = await response.text();
+        console.log(`Successfully fetched ${filePath} (${content.length} characters)`);
+        return content;
+      } else {
+        console.log(`Failed to fetch ${filePath}: ${response.status} ${response.statusText}`);
       }
     } catch (error) {
       console.log(`Could not fetch ${filePath} from Azure DevOps repo:`, error);
@@ -149,26 +157,35 @@ const Dashboard = () => {
     return files;
   };
 
+  // Updated Azure DevOps file listing with CORS-safe approach
   const listAllAzureFiles = async (organization: string, project: string, repoId: string, path: string, token: string): Promise<string[]> => {
     let files: string[] = [];
     try {
       console.log(`Listing files in Azure DevOps repo: org=${organization}, project=${project}, repoId=${repoId}, path=${path}`);
       
-      const res = await axios.get(
-        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoId}/items?path=${path}&recursionLevel=Full&api-version=6.0`,
-        { 
-          headers: { 
-            Authorization: `Basic ${btoa(':' + token)}`,
-            'Content-Type': 'application/json'
-          } 
-        }
-      );
+      // Create a CORS-safe request using a proxy approach
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(
+        `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoId}/items?path=${path}&recursionLevel=Full&api-version=6.0`
+      )}`;
       
-      if (res.data && res.data.value) {
-        files = res.data.value
-          .filter((item: any) => !item.isFolder && item.path)
-          .map((item: any) => item.path.substring(1)); // Remove leading slash
-        console.log(`Successfully listed ${files.length} files from Azure DevOps`);
+      const response = await fetch(proxyUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Basic ${btoa(':' + token)}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.value) {
+          files = data.value
+            .filter((item: any) => !item.isFolder && item.path)
+            .map((item: any) => item.path.substring(1)); // Remove leading slash
+          console.log(`Successfully listed ${files.length} files from Azure DevOps`);
+        }
+      } else {
+        console.log(`Failed to list files: ${response.status} ${response.statusText}`);
       }
     } catch (e) {
       console.log('Error listing Azure DevOps files:', e);
@@ -303,44 +320,68 @@ const Dashboard = () => {
     return muleApps;
   };
 
+  // Updated Azure DevOps scanning with CORS-safe approach
   const scanAzureRepositories = async (token: string, organization: string) => {
     let allRepos = [];
     try {
-      // First get all projects
-      const projectsRes = await axios.get(
-        `https://dev.azure.com/${organization}/_apis/projects?api-version=6.0`,
-        { 
-          headers: { 
-            Authorization: `Basic ${btoa(':' + token)}`,
-            'Content-Type': 'application/json'
-          } 
-        }
-      );
+      console.log('Scanning Azure DevOps repositories with CORS-safe approach...');
       
-      console.log('Azure DevOps projects found:', projectsRes.data.value.length);
+      // First get all projects using CORS proxy
+      const projectsProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(
+        `https://dev.azure.com/${organization}/_apis/projects?api-version=6.0`
+      )}`;
+      
+      const projectsResponse = await fetch(projectsProxyUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Basic ${btoa(':' + token)}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (!projectsResponse.ok) {
+        throw new Error(`Failed to fetch projects: ${projectsResponse.status} ${projectsResponse.statusText}`);
+      }
+      
+      const projectsData = await projectsResponse.json();
+      console.log('Azure DevOps projects found:', projectsData.value?.length || 0);
+      
+      if (!projectsData.value || projectsData.value.length === 0) {
+        console.log('No projects found in Azure DevOps organization');
+        return [];
+      }
       
       // Then get repositories for each project
-      for (const project of projectsRes.data.value) {
+      for (const project of projectsData.value) {
         try {
-          const reposRes = await axios.get(
-            `https://dev.azure.com/${organization}/${project.name}/_apis/git/repositories?api-version=6.0`,
-            { 
-              headers: { 
-                Authorization: `Basic ${btoa(':' + token)}`,
-                'Content-Type': 'application/json'
-              } 
+          const reposProxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(
+            `https://dev.azure.com/${organization}/${project.name}/_apis/git/repositories?api-version=6.0`
+          )}`;
+          
+          const reposResponse = await fetch(reposProxyUrl, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Basic ${btoa(':' + token)}`,
+              'Content-Type': 'application/json'
             }
-          );
+          });
           
-          console.log(`Found ${reposRes.data.value.length} repositories in project ${project.name}`);
-          
-          for (const repo of reposRes.data.value) {
-            allRepos.push({
-              ...repo,
-              project: project.name,
-              organization,
-              repoId: repo.id // Store the actual repository ID
-            });
+          if (reposResponse.ok) {
+            const reposData = await reposResponse.json();
+            console.log(`Found ${reposData.value?.length || 0} repositories in project ${project.name}`);
+            
+            if (reposData.value) {
+              for (const repo of reposData.value) {
+                allRepos.push({
+                  ...repo,
+                  project: project.name,
+                  organization,
+                  repoId: repo.id // Store the actual repository ID
+                });
+              }
+            }
+          } else {
+            console.log(`Error fetching repos for project ${project.name}: ${reposResponse.status}`);
           }
         } catch (error) {
           console.log(`Error fetching repos for project ${project.name}:`, error);
@@ -519,7 +560,13 @@ const Dashboard = () => {
       }
     } catch (err) {
       console.error('Repository scanning error:', err);
-      toast.error('Failed to fetch repositories. Please check your token and permissions.');
+      if (err instanceof Error && err.message.includes('401')) {
+        toast.error('Authentication failed. Please check your token and permissions.');
+      } else if (err instanceof Error && err.message.includes('CORS')) {
+        toast.error('CORS error encountered. Please try again or contact support.');
+      } else {
+        toast.error('Failed to fetch repositories. Please check your token and permissions.');
+      }
     } finally {
       setFetchingRepos(false);
     }
