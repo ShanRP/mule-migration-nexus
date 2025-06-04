@@ -11,31 +11,46 @@ export type Database = {
     Tables: {
       organizations: {
         Row: {
+          azure_devops_token: string | null
+          azure_devops_url: string | null
           created_at: string
+          github_token: string | null
+          github_url: string | null
           id: string
           initial: string
           invite_enabled: boolean | null
           name: string
+          repository_type: string | null
           session_timeout: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
+          azure_devops_token?: string | null
+          azure_devops_url?: string | null
           created_at?: string
+          github_token?: string | null
+          github_url?: string | null
           id?: string
           initial: string
           invite_enabled?: boolean | null
           name: string
+          repository_type?: string | null
           session_timeout?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
+          azure_devops_token?: string | null
+          azure_devops_url?: string | null
           created_at?: string
+          github_token?: string | null
+          github_url?: string | null
           id?: string
           initial?: string
           invite_enabled?: boolean | null
           name?: string
+          repository_type?: string | null
           session_timeout?: string | null
           updated_at?: string
           user_id?: string
@@ -82,6 +97,11 @@ export type Database = {
           initial: string
           session_timeout: string
           invite_enabled: boolean
+          github_url: string
+          github_token: string
+          azure_devops_url: string
+          azure_devops_token: string
+          repository_type: string
           created_at: string
           updated_at: string
         }[]
