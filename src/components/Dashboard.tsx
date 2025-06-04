@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -8,6 +7,7 @@ import { toast } from 'sonner';
 import { Github, Cloud, RefreshCw } from 'lucide-react';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import RepositoryList from './RepositoryList';
+import { isMuleApplication, extractMuleInfo, analyzeMuleConfiguration } from '@/utils/muleDetection';
 import axios from 'axios';
 
 interface MuleDependency {
@@ -19,6 +19,13 @@ interface MuleDependency {
   replacement?: string;
 }
 
+interface MuleConnector {
+  name: string;
+  namespace: string;
+  isDeprecated: boolean;
+  cloudHub2Alternative?: string;
+}
+
 interface MuleApplication {
   id: string;
   name: string;
@@ -27,6 +34,7 @@ interface MuleApplication {
   muleVersion: string;
   javaVersion: string;
   dependencies: MuleDependency[];
+  connectors: MuleConnector[];
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   lastUpdated: string;
   selected?: boolean;
@@ -69,80 +77,23 @@ const Dashboard = () => {
     setConnecting(null);
   };
 
-  const isMuleApplication = (pomXml: string): boolean => {
-    // Check for Mule-specific indicators in pom.xml
-    const muleIndicators = [
-      /<groupId>org\.mule\./,
-      /<artifactId>mule-/,
-      /<mule\.version>/,
-      /<packaging>mule-application<\/packaging>/,
-      /<packaging>mule<\/packaging>/,
-      /<plugin>[\s\S]*?<groupId>org\.mule\.tools\.maven<\/groupId>/,
-      /<dependency>[\s\S]*?<groupId>org\.mule\.connectors<\/groupId>/,
-      /<dependency>[\s\S]*?<groupId>org\.mule\.modules<\/groupId>/
-    ];
-
-    return muleIndicators.some(regex => regex.test(pomXml));
-  };
-
-  const extractMuleInfo = (pomXml: string) => {
-    // Extract Mule version with multiple patterns
-    const muleVersionPatterns = [
-      /<mule\.version>(.*?)<\/mule\.version>/,
-      /<version>(4\.\d+\.\d+)<\/version>[\s\S]*?<groupId>org\.mule/,
-      /<version>(3\.\d+\.\d+)<\/version>[\s\S]*?<groupId>org\.mule/
-    ];
-    
-    let muleVersion = 'Unknown';
-    for (const pattern of muleVersionPatterns) {
-      const match = pomXml.match(pattern);
-      if (match && match[1]) {
-        muleVersion = match[1];
-        break;
+  const fetchFileContent = async (repoFullName: string, filePath: string, token: string): Promise<string | null> => {
+    try {
+      console.log(`Fetching ${filePath} from ${repoFullName}`);
+      const response = await axios.get(
+        `https://api.github.com/repos/${repoFullName}/contents/${filePath}`,
+        { headers: { Authorization: `token ${token}` } }
+      );
+      
+      if (response.data && response.data.content) {
+        const content = atob(response.data.content.replace(/\n/g, ''));
+        console.log(`Successfully fetched ${filePath} (${content.length} characters)`);
+        return content;
       }
+    } catch (error) {
+      console.log(`Could not fetch ${filePath} from ${repoFullName}:`, error);
     }
-
-    // Extract Java version
-    const javaVersionPatterns = [
-      /<java\.version>(.*?)<\/java\.version>/,
-      /<maven\.compiler\.source>(.*?)<\/maven\.compiler\.source>/,
-      /<maven\.compiler\.target>(.*?)<\/maven\.compiler\.target>/
-    ];
-    
-    let javaVersion = 'Unknown';
-    for (const pattern of javaVersionPatterns) {
-      const match = pomXml.match(pattern);
-      if (match && match[1]) {
-        javaVersion = match[1];
-        break;
-      }
-    }
-
-    // Extract Mule-specific dependencies
-    const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
-    const dependencies = depMatches
-      .map(match => {
-        const depXml = match[1];
-        const groupId = (depXml.match(/<groupId>(.*?)<\/groupId>/) || [])[1] || '';
-        const artifactId = (depXml.match(/<artifactId>(.*?)<\/artifactId>/) || [])[1] || '';
-        const version = (depXml.match(/<version>(.*?)<\/version>/) || [])[1] || '';
-        
-        return { groupId, artifactId, version };
-      })
-      .filter(dep => 
-        dep.groupId.includes('mule') || 
-        dep.artifactId.includes('mule') ||
-        dep.groupId.includes('org.mule')
-      )
-      .map(dep => ({
-        groupId: dep.groupId,
-        artifactId: dep.artifactId,
-        version: dep.version,
-        latestVersion: dep.version,
-        isDeprecated: false
-      }));
-
-    return { muleVersion, javaVersion, dependencies };
+    return null;
   };
 
   const handleScanRepositories = async () => {
@@ -156,9 +107,9 @@ const Dashboard = () => {
     setApplications([]);
     
     try {
-      console.log('Starting repository scan...');
+      console.log('Starting comprehensive repository scan...');
       
-      // Fetch user/org repos with pagination
+      // Fetch repositories with pagination
       const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
       let allRepos = [];
       let page = 1;
@@ -178,59 +129,98 @@ const Dashboard = () => {
         allRepos.push(...reposRes.data);
         page++;
         
-        // Limit to prevent excessive API calls (adjust as needed)
-        if (page > 10) break;
+        if (page > 10) break; // Safety limit
       }
       
       console.log(`Found ${allRepos.length} total repositories`);
       
-      // Check each repo for Mule applications
+      // Analyze each repository comprehensively
       const muleApps: MuleApplication[] = [];
+      
       for (const repo of allRepos) {
         try {
-          console.log(`Checking repository: ${repo.name}`);
-          const pomRes = await axios.get(
-            `https://api.github.com/repos/${repo.full_name}/contents/pom.xml`,
-            { headers: { Authorization: `token ${token}` } }
-          );
+          console.log(`\n=== Analyzing repository: ${repo.name} ===`);
           
-          if (pomRes.data && pomRes.data.content) {
-            // Decode base64 pom.xml
-            const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
+          // Fetch pom.xml
+          const pomXml = await fetchFileContent(repo.full_name, 'pom.xml', token);
+          
+          if (pomXml && isMuleApplication(pomXml)) {
+            console.log(`✅ Confirmed Mule application: ${repo.name}`);
             
-            // Check if it's actually a Mule application
-            if (isMuleApplication(pomXml)) {
-              console.log(`✓ Found Mule application: ${repo.name}`);
-              
-              const { muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
-              
-              muleApps.push({
-                id: repo.id,
-                name: repo.name,
-                repository: repo.html_url,
-                branch: repo.default_branch,
-                muleVersion,
-                javaVersion,
-                dependencies,
-                status: 'pending',
-                lastUpdated: repo.updated_at
-              });
-            } else {
-              console.log(`✗ Not a Mule application: ${repo.name}`);
+            // Extract basic Mule info from pom.xml
+            const { muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+            
+            // Try to fetch mule-configuration.xml from common locations
+            const configPaths = [
+              'src/main/mule/mule-configuration.xml',
+              'src/main/app/mule-configuration.xml',
+              'src/main/resources/mule-configuration.xml',
+              'mule-configuration.xml'
+            ];
+            
+            let connectors: MuleConnector[] = [];
+            
+            for (const configPath of configPaths) {
+              const configXml = await fetchFileContent(repo.full_name, configPath, token);
+              if (configXml) {
+                console.log(`Found Mule configuration at: ${configPath}`);
+                connectors = analyzeMuleConfiguration(configXml);
+                break;
+              }
             }
+            
+            // If no specific config file, try to find any .xml files in src/main/mule
+            if (connectors.length === 0) {
+              try {
+                const muleDir = await axios.get(
+                  `https://api.github.com/repos/${repo.full_name}/contents/src/main/mule`,
+                  { headers: { Authorization: `token ${token}` } }
+                );
+                
+                if (muleDir.data && Array.isArray(muleDir.data)) {
+                  for (const file of muleDir.data) {
+                    if (file.name.endsWith('.xml')) {
+                      const xmlContent = await fetchFileContent(repo.full_name, file.path, token);
+                      if (xmlContent) {
+                        const fileConnectors = analyzeMuleConfiguration(xmlContent);
+                        connectors = [...connectors, ...fileConnectors];
+                      }
+                    }
+                  }
+                }
+              } catch (e) {
+                console.log(`No src/main/mule directory found in ${repo.name}`);
+              }
+            }
+            
+            muleApps.push({
+              id: repo.id.toString(),
+              name: repo.name,
+              repository: repo.html_url,
+              branch: repo.default_branch,
+              muleVersion,
+              javaVersion,
+              dependencies,
+              connectors,
+              status: 'pending',
+              lastUpdated: repo.updated_at
+            });
+            
+            console.log(`Added Mule app: ${repo.name} (Mule ${muleVersion}, Java ${javaVersion}, ${dependencies.length} deps, ${connectors.length} connectors)`);
+          } else {
+            console.log(`❌ Not a Mule application: ${repo.name}`);
           }
-        } catch (e) {
-          // No pom.xml or access denied, skip silently
-          console.log(`No pom.xml found in ${repo.name}`);
+        } catch (error) {
+          console.log(`Error analyzing ${repo.name}:`, error);
         }
       }
       
-      console.log(`Found ${muleApps.length} Mule applications`);
+      console.log(`\n🎯 SCAN COMPLETE: Found ${muleApps.length} Mule applications`);
       setApplications(muleApps);
       setShowRepositories(true);
       
       if (muleApps.length > 0) {
-        toast.success(`Found ${muleApps.length} Mule application(s)!`);
+        toast.success(`Found ${muleApps.length} Mule application(s) with comprehensive analysis!`);
       } else {
         toast.info('No Mule applications found in your repositories.');
       }

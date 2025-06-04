@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import axios from 'axios';
@@ -18,6 +18,13 @@ interface MuleDependency {
   replacement?: string;
 }
 
+interface MuleConnector {
+  name: string;
+  namespace: string;
+  isDeprecated: boolean;
+  cloudHub2Alternative?: string;
+}
+
 interface MuleApplication {
   id: string;
   name: string;
@@ -26,6 +33,7 @@ interface MuleApplication {
   muleVersion: string;
   javaVersion: string;
   dependencies: MuleDependency[];
+  connectors: MuleConnector[];
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   lastUpdated: string;
   selected?: boolean;
@@ -137,13 +145,19 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     }
   };
 
+  const getTotalDeprecatedItems = (app: MuleApplication) => {
+    const deprecatedDeps = app.dependencies.filter(dep => dep.isDeprecated).length;
+    const deprecatedConnectors = app.connectors.filter(conn => conn.isDeprecated).length;
+    return deprecatedDeps + deprecatedConnectors;
+  };
+
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
           <CardTitle>Mule Applications ({applications.length} found)</CardTitle>
           <CardDescription>
-            Select applications to migrate to CloudHub 2.0
+            Comprehensive analysis including dependencies, connectors, and CloudHub 2.0 compatibility
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -152,11 +166,11 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
               <TableRow>
                 <TableHead className="w-[50px]">Select</TableHead>
                 <TableHead>Application</TableHead>
-                <TableHead>Repository</TableHead>
-                <TableHead>Mule Version</TableHead>
-                <TableHead>Java Version</TableHead>
+                <TableHead>Versions</TableHead>
                 <TableHead>Dependencies</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead>Connectors</TableHead>
+                <TableHead>Migration Status</TableHead>
+                <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -169,48 +183,83 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
                       onChange={() => toggleApplicationSelection(app.id)}
                     />
                   </TableCell>
-                  <TableCell className="font-medium">{app.name}</TableCell>
                   <TableCell>
-                    <a 
-                      href={app.repository} 
-                      target="_blank" 
-                      rel="noopener noreferrer" 
-                      className="text-blue-600 hover:underline"
-                    >
-                      {app.repository.split('/').slice(-2).join('/')}
-                    </a>
+                    <div>
+                      <div className="font-medium">{app.name}</div>
+                      <a 
+                        href={app.repository} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="text-blue-600 hover:underline text-sm flex items-center"
+                      >
+                        {app.repository.split('/').slice(-2).join('/')}
+                        <ExternalLink className="h-3 w-3 ml-1" />
+                      </a>
+                    </div>
                   </TableCell>
-                  <TableCell>{app.muleVersion}</TableCell>
-                  <TableCell>{app.javaVersion}</TableCell>
                   <TableCell>
                     <div className="space-y-1">
-                      {app.dependencies.slice(0, 3).map((dep, index) => (
-                        <div key={index} className="flex items-center space-x-2">
-                          <span className="text-sm">{dep.artifactId}</span>
-                          <Badge variant={dep.isDeprecated ? "destructive" : "secondary"} className="text-xs">
-                            {dep.version}
-                          </Badge>
-                          {dep.isDeprecated && dep.replacement && (
-                            <Badge variant="outline" className="text-yellow-600 text-xs">
-                              Replace with {dep.replacement}
-                            </Badge>
-                          )}
-                        </div>
-                      ))}
-                      {app.dependencies.length > 3 && (
-                        <div className="text-xs text-gray-500">
-                          +{app.dependencies.length - 3} more
-                        </div>
+                      <Badge variant="outline" className="text-xs">
+                        Mule {app.muleVersion}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        Java {app.javaVersion}
+                      </Badge>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="space-y-1">
+                      <div className="text-sm text-gray-600">
+                        {app.dependencies.length} total
+                      </div>
+                      {app.dependencies.filter(dep => dep.isDeprecated).length > 0 && (
+                        <Badge variant="destructive" className="text-xs">
+                          {app.dependencies.filter(dep => dep.isDeprecated).length} deprecated
+                        </Badge>
+                      )}
+                      {app.dependencies.filter(dep => dep.version !== dep.latestVersion).length > 0 && (
+                        <Badge variant="outline" className="text-yellow-600 text-xs">
+                          {app.dependencies.filter(dep => dep.version !== dep.latestVersion).length} updates available
+                        </Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="space-y-1">
+                      <div className="text-sm text-gray-600">
+                        {app.connectors.length} connectors
+                      </div>
+                      {app.connectors.filter(conn => conn.isDeprecated).length > 0 && (
+                        <Badge variant="destructive" className="text-xs">
+                          {app.connectors.filter(conn => conn.isDeprecated).length} deprecated
+                        </Badge>
+                      )}
+                      {app.connectors.filter(conn => conn.cloudHub2Alternative).length > 0 && (
+                        <Badge variant="outline" className="text-blue-600 text-xs">
+                          CloudHub 2.0 alternatives available
+                        </Badge>
                       )}
                     </div>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center space-x-2">
                       {getStatusIcon(app.status)}
-                      <span className={getStatusColor(app.status)}>
-                        {app.status.replace('_', ' ')}
-                      </span>
+                      <div className="flex flex-col">
+                        <span className={getStatusColor(app.status)}>
+                          {app.status.replace('_', ' ')}
+                        </span>
+                        {getTotalDeprecatedItems(app) > 0 && (
+                          <span className="text-xs text-red-600">
+                            {getTotalDeprecatedItems(app)} items need attention
+                          </span>
+                        )}
+                      </div>
                     </div>
+                  </TableCell>
+                  <TableCell>
+                    <Button variant="outline" size="sm">
+                      View Details
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}
