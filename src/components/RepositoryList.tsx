@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -43,6 +42,9 @@ interface MuleApplication {
   applicationName: string;
   muleRuntime: string;
   artifactJson?: Record<string, any>;
+  pomPaths?: string[];
+  artifactJsonPaths?: string[];
+  projectXmlPaths?: string[];
 }
 
 interface RepositoryListProps {
@@ -65,29 +67,19 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     ));
   };
 
+  // Helper to normalize file paths (remove leading slash)
+  const normalizePath = (path: string) => path.replace(/^\/+/, '');
+
   const migrateGitHubApplication = async (app: MuleApplication) => {
     const repoPath = app.repository.replace('https://github.com/', '');
-    
-    // Get latest pom.xml SHA
-    const pomRes = await axios.get(
-      `https://api.github.com/repos/${repoPath}/contents/pom.xml`,
-      { headers: { Authorization: `token ${githubToken}` } }
-    );
-    const pomSha = pomRes.data.sha;
-    const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
-    
-    // Update dependencies to latest (for demo, just append a comment)
-    const updatedPom = pomXml + '\n<!-- Updated for CloudHub 2.0 migration -->';
-    
-    // Create a new branch from default
+    const newBranch = 'mulemigration';
+    // 1. Get base branch SHA
     const branchRes = await axios.get(
       `https://api.github.com/repos/${repoPath}/git/refs/heads/${app.branch}`,
       { headers: { Authorization: `token ${githubToken}` } }
     );
     const baseSha = branchRes.data.object.sha;
-    const newBranch = 'mulemigration';
-    
-    // Create branch (ignore if exists)
+    // 2. Create branch (ignore if exists)
     try {
       await axios.post(
         `https://api.github.com/repos/${repoPath}/git/refs`,
@@ -97,21 +89,75 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
         },
         { headers: { Authorization: `token ${githubToken}` } }
       );
-    } catch (e) {
-      // Branch may already exist
+    } catch (e) {/* branch may already exist */}
+    // 3. Update all pom.xml files
+    for (const pomPath of app.pomPaths || ['pom.xml']) {
+      const normPomPath = normalizePath(pomPath);
+      console.log('Attempting to fetch/update pom.xml:', normPomPath, 'on branch', newBranch);
+      const pomRes = await axios.get(
+        `https://api.github.com/repos/${repoPath}/contents/${normPomPath}`,
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
+      const pomSha = pomRes.data.sha;
+      const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
+      // For demo, just append a comment. You can add version update logic here if needed.
+      const updatedPom = pomXml + '\n<!-- Updated for CloudHub 2.0 migration -->';
+      await axios.put(
+        `https://api.github.com/repos/${repoPath}/contents/${normPomPath}`,
+        {
+          message: 'Mule migration: update dependencies for CloudHub 2.0',
+          content: btoa(updatedPom),
+          branch: newBranch,
+          sha: pomSha
+        },
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
     }
-    
-    // Commit updated pom.xml to new branch
-    await axios.put(
-      `https://api.github.com/repos/${repoPath}/contents/pom.xml`,
-      {
-        message: 'Mule migration: update dependencies for CloudHub 2.0',
-        content: btoa(updatedPom),
-        branch: newBranch,
-        sha: pomSha
-      },
-      { headers: { Authorization: `token ${githubToken}` } }
-    );
+    // 4. Update all mule-artifact.json files
+    for (const ajPath of app.artifactJsonPaths || []) {
+      const normAjPath = normalizePath(ajPath);
+      console.log('Attempting to fetch/update mule-artifact.json:', normAjPath, 'on branch', newBranch);
+      const ajRes = await axios.get(
+        `https://api.github.com/repos/${repoPath}/contents/${normAjPath}`,
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
+      const ajSha = ajRes.data.sha;
+      const ajJson = JSON.parse(atob(ajRes.data.content.replace(/\n/g, '')));
+      // For demo, just add a migration comment
+      const updatedAj = { ...ajJson, migration: 'CloudHub 2.0' };
+      await axios.put(
+        `https://api.github.com/repos/${repoPath}/contents/${normAjPath}`,
+        {
+          message: 'Mule migration: update Java version for CloudHub 2.0',
+          content: btoa(JSON.stringify(updatedAj, null, 2)),
+          branch: newBranch,
+          sha: ajSha
+        },
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
+    }
+    // 5. Update all src/main/*.xml files
+    for (const xmlPath of app.projectXmlPaths || []) {
+      const normXmlPath = normalizePath(xmlPath);
+      console.log('Attempting to fetch/update project xml:', normXmlPath, 'on branch', newBranch);
+      const xmlRes = await axios.get(
+        `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}`,
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
+      const xmlSha = xmlRes.data.sha;
+      const xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
+      const updatedXml = xmlContent + '\n<!-- Updated for CloudHub 2.0 migration -->';
+      await axios.put(
+        `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}`,
+        {
+          message: 'Mule migration: update for CloudHub 2.0',
+          content: btoa(updatedXml),
+          branch: newBranch,
+          sha: xmlSha
+        },
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
+    }
   };
 
   const migrateAzureApplication = async (app: MuleApplication) => {

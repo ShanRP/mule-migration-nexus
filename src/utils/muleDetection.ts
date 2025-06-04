@@ -1,4 +1,3 @@
-
 interface MuleDependency {
   groupId: string;
   artifactId: string;
@@ -87,17 +86,30 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
     muleVersion = muleVersionMatch[1];
   }
 
-  // Java version from artifactJson (prefer javaSpecificationVersions[0])
+  // Java version from artifactJson (robust extraction)
   let javaVersion = 'Unknown';
-  if (artifactJson && Array.isArray(artifactJson['javaSpecificationVersions']) && artifactJson['javaSpecificationVersions'].length > 0) {
-    javaVersion = artifactJson['javaSpecificationVersions'][0];
-  } else if (artifactJson) {
-    if (artifactJson['javaversion']) javaVersion = artifactJson['javaversion'];
-    else if (artifactJson['javaVersion']) javaVersion = artifactJson['javaVersion'];
-    else {
-      // Try case-insensitive
+  if (artifactJson) {
+    // Check common keys and nested structures
+    if (Array.isArray(artifactJson['javaSpecificationVersions']) && artifactJson['javaSpecificationVersions'].length > 0) {
+      javaVersion = artifactJson['javaSpecificationVersions'][0];
+    } else if (artifactJson['javaversion']) {
+      javaVersion = artifactJson['javaversion'];
+    } else if (artifactJson['javaVersion']) {
+      javaVersion = artifactJson['javaVersion'];
+    } else if (artifactJson['java']) {
+      javaVersion = artifactJson['java'];
+    } else {
+      // Try case-insensitive and nested keys
       for (const key of Object.keys(artifactJson)) {
-        if (key.toLowerCase() === 'javaversion') javaVersion = artifactJson[key];
+        if (key.toLowerCase().includes('java')) {
+          if (typeof artifactJson[key] === 'string') {
+            javaVersion = artifactJson[key];
+            break;
+          } else if (Array.isArray(artifactJson[key]) && artifactJson[key].length > 0) {
+            javaVersion = artifactJson[key][0];
+            break;
+          }
+        }
       }
     }
   }
@@ -320,3 +332,13 @@ const getCloudHub2Alternative = (namespace: string): string | undefined => {
 
 export const getLatestMuleVersion = () => '4.9';
 export const getLatestJavaVersion = () => '17';
+
+export const extractAzureOrganization = (url: string): string => {
+  if (!url) return '';
+  // Accepts both https://dev.azure.com/org and https://org.visualstudio.com
+  const devAzureMatch = url.match(/dev\.azure\.com\/([^/]+)/);
+  if (devAzureMatch) return devAzureMatch[1];
+  const vsMatch = url.match(/https:\/\/([^\.]+)\.visualstudio\.com/);
+  if (vsMatch) return vsMatch[1];
+  return '';
+};

@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -8,7 +7,7 @@ import { toast } from 'sonner';
 import { Github, Cloud, RefreshCw } from 'lucide-react';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import RepositoryList from './RepositoryList';
-import { isMuleApplication, extractMuleInfo, analyzeMuleConfiguration } from '@/utils/muleDetection';
+import { isMuleApplication, extractMuleInfo, analyzeMuleConfiguration, extractAzureOrganization } from '@/utils/muleDetection';
 import axios from 'axios';
 
 interface MuleDependency {
@@ -47,6 +46,7 @@ const Dashboard = () => {
   const { selectedOrganization, updateOrganization } = useOrganizations();
   const [githubToken, setGithubToken] = useState('');
   const [azureToken, setAzureToken] = useState('');
+  const [azureOrgUrl, setAzureOrgUrl] = useState('');
   const [connecting, setConnecting] = useState<'github' | 'azure' | null>(null);
   const [applications, setApplications] = useState<MuleApplication[]>([]);
   const [fetchingRepos, setFetchingRepos] = useState(false);
@@ -71,9 +71,14 @@ const Dashboard = () => {
       toast.error('Please enter an Azure DevOps token');
       return;
     }
+    if (!azureOrgUrl.trim()) {
+      toast.error('Please enter your Azure DevOps organization URL');
+      return;
+    }
     setConnecting('azure');
     await updateOrganization(selectedOrganization!.id, {
       azure_devops_token: azureToken.trim(),
+      azure_devops_url: azureOrgUrl.trim(),
       repository_type: 'azure_devops',
     });
     toast.success('Azure DevOps token saved!');
@@ -375,10 +380,9 @@ const Dashboard = () => {
         muleApps = await scanGitHubRepositories(githubToken, orgName);
       } else if (repositoryType === 'azure_devops' && azureToken) {
         console.log('Scanning Azure DevOps repositories...');
-        const organization = selectedOrganization?.azure_devops_url?.split('/').pop() || 
-                           selectedOrganization?.azure_devops_url?.split('dev.azure.com/')[1]?.split('/')[0] || '';
+        const organization = extractAzureOrganization(selectedOrganization?.azure_devops_url || '');
         if (!organization) {
-          toast.error('Please provide Azure DevOps organization URL');
+          toast.error('Please provide a valid Azure DevOps organization URL');
           return;
         }
         muleApps = await scanAzureRepositories(azureToken, organization);
@@ -470,6 +474,12 @@ const Dashboard = () => {
             </TabsContent>
             <TabsContent value="azure">
               <div className="space-y-4">
+                <Input
+                  placeholder="Azure DevOps Organization URL (e.g., https://dev.azure.com/your-org)"
+                  value={azureOrgUrl}
+                  onChange={e => setAzureOrgUrl(e.target.value)}
+                  type="text"
+                />
                 <Input
                   placeholder="Azure DevOps Personal Access Token"
                   value={azureToken}
