@@ -158,8 +158,8 @@ const Header = () => {
                       </DialogFooter>
                     </DialogContent>
                   </Dialog>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
 
             {/* User Menu */}
