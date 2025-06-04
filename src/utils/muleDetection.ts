@@ -193,17 +193,21 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
 
 export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[] => {
   const connectors: MuleConnector[] = [];
-  // Only extract connectors from namespaces and flows, not from mule-configuration.xml
+  
+  // Extract connectors from namespaces and flows
   const namespaceMatches = [...muleConfigXml.matchAll(/xmlns:(\w+)="([^"]+)"/g)];
   namespaceMatches.forEach(match => {
     const prefix = match[1];
     const namespace = match[2];
     let isDeprecated = isDeprecatedConnector(namespace);
     let cloudHub2Alternative = getCloudHub2Alternative(namespace);
-    if (namespace.includes('cloudhub')) {
+    
+    // Special handling for CloudHub connectors
+    if (namespace.includes('cloudhub') || prefix.includes('cloudhub')) {
       isDeprecated = true;
-      cloudHub2Alternative = 'Not available in CloudHub 2.0';
+      cloudHub2Alternative = 'Logger Connector (CloudHub 2.0 replacement)';
     }
+    
     if (namespace.includes('mule') || namespace.includes('connector')) {
       connectors.push({
         name: prefix,
@@ -213,6 +217,7 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
       });
     }
   });
+  
   // Look for VM connector with persistence
   if (/persistent\s*=\s*['"]?true['"]?/i.test(muleConfigXml) && /<vm:/i.test(muleConfigXml)) {
     connectors.push({
@@ -222,6 +227,29 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
       cloudHub2Alternative: 'Replace with Logger connector (CloudHub 2.0)'
     });
   }
+  
+  // Enhanced CloudHub connector detection
+  const cloudHubPatterns = [
+    /<cloudhub:create-notification/g,
+    /<cloudhub:list-notifications/g,
+    /<cloudhub:get-application/g,
+    /<cloudhub:[^>]+>/g
+  ];
+  
+  cloudHubPatterns.forEach(pattern => {
+    if (pattern.test(muleConfigXml)) {
+      const existingCloudHub = connectors.find(c => c.name === 'cloudhub');
+      if (!existingCloudHub) {
+        connectors.push({
+          name: 'CloudHub Connector',
+          namespace: 'cloudhub',
+          isDeprecated: true,
+          cloudHub2Alternative: 'Logger Connector (CloudHub 2.0 replacement)'
+        });
+      }
+    }
+  });
+  
   // Also look for specific connector usage in flows
   const flowMatches = [...muleConfigXml.matchAll(/<flow[\s\S]*?<\/flow>/g)];
   flowMatches.forEach(flowMatch => {
@@ -252,6 +280,7 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
       }
     });
   });
+  
   return connectors;
 };
 
@@ -351,10 +380,11 @@ const isDeprecatedConnector = (namespace: string): boolean => {
     'http://www.mulesoft.org/schema/mule/ftp',
     'http://www.mulesoft.org/schema/mule/email',
     'http://www.mulesoft.org/schema/mule/tcp',
-    'http://www.mulesoft.org/schema/mule/udp'
+    'http://www.mulesoft.org/schema/mule/udp',
+    'http://www.mulesoft.org/schema/mule/cloudhub' // Added CloudHub namespace
   ];
   
-  return deprecatedNamespaces.includes(namespace);
+  return deprecatedNamespaces.includes(namespace) || namespace.includes('cloudhub');
 };
 
 const getCloudHub2Alternative = (namespace: string): string | undefined => {
@@ -364,12 +394,19 @@ const getCloudHub2Alternative = (namespace: string): string | undefined => {
     'http://www.mulesoft.org/schema/mule/file': 'File Connector 1.5+ (CloudHub 2.0 compatible)',
     'http://www.mulesoft.org/schema/mule/ftp': 'FTP Connector 1.8+ (CloudHub 2.0 compatible)',
     'http://www.mulesoft.org/schema/mule/email': 'Email Connector 1.4+ (CloudHub 2.0 compatible)',
+    'http://www.mulesoft.org/schema/mule/cloudhub': 'Logger Connector (CloudHub 2.0 replacement)',
     'mule-vm': 'VM Connector 2.0',
     'mule-jms': 'JMS Connector 1.8+',
     'mule-file': 'File Connector 1.5+',
     'mule-ftp': 'FTP Connector 1.8+',
-    'mule-email': 'Email Connector 1.4+'
+    'mule-email': 'Email Connector 1.4+',
+    'mule-cloudhub': 'Logger Connector (CloudHub 2.0 replacement)'
   };
+  
+  // Handle CloudHub-related namespaces
+  if (namespace.includes('cloudhub')) {
+    return 'Logger Connector (CloudHub 2.0 replacement)';
+  }
   
   return alternatives[namespace];
 };
