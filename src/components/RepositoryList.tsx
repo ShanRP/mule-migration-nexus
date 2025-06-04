@@ -140,12 +140,23 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
       `<app.runtime>${latestMuleVersion}</app.runtime>`
     );
     
-    // Remove CloudHub dependencies
+    // Remove ONLY CloudHub dependencies with more precise patterns
     console.log('Removing CloudHub dependencies from POM...');
+    
+    // More precise CloudHub dependency removal patterns
     const cloudHubDepPatterns = [
-      /<dependency>[\s\S]*?<groupId>org\.mule\.modules<\/groupId>[\s\S]*?<artifactId>mule-module-cloudhub<\/artifactId>[\s\S]*?<\/dependency>/g,
-      /<dependency>[\s\S]*?<groupId>com\.mulesoft\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g,
-      /<dependency>[\s\S]*?<artifactId>.*cloudhub.*<\/artifactId>[\s\S]*?<\/dependency>/g
+      // Specific CloudHub module dependency
+      /<dependency>\s*<groupId>org\.mule\.modules<\/groupId>\s*<artifactId>mule-module-cloudhub<\/artifactId>[\s\S]*?<\/dependency>/g,
+      
+      // CloudHub connector dependencies
+      /<dependency>\s*<groupId>org\.mule\.connectors<\/groupId>\s*<artifactId>mule-cloudhub-connector<\/artifactId>[\s\S]*?<\/dependency>/g,
+      
+      // Any dependency with cloudhub in artifactId
+      /<dependency>[\s\S]*?<artifactId>[^<]*cloudhub[^<]*<\/artifactId>[\s\S]*?<\/dependency>/g,
+      
+      // CloudHub specific groupIds
+      /<dependency>\s*<groupId>com\.mulesoft\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g,
+      /<dependency>\s*<groupId>com\.mulesoft\.modules\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g
     ];
     
     cloudHubDepPatterns.forEach(pattern => {
@@ -155,6 +166,9 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
         updatedPom = updatedPom.replace(pattern, '');
       }
     });
+    
+    // Clean up any double empty lines left by removed dependencies
+    updatedPom = updatedPom.replace(/\n\s*\n\s*\n/g, '\n\n');
     
     // Update each dependency to its latest version
     dependencies.forEach(dep => {
