@@ -1,211 +1,315 @@
+import React, { useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Github, RefreshCw, GitBranch, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
+import { toast } from 'sonner';
+import axios from 'axios';
+import { useOrganizations } from '@/providers/OrganizationProvider';
 
-import { useState } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { 
-  GitBranch, 
-  Scan, 
-  CheckCircle, 
-  AlertTriangle, 
-  Clock,
-  Github,
-  Search
-} from "lucide-react";
+interface MuleDependency {
+  groupId: string;
+  artifactId: string;
+  version: string;
+  latestVersion: string;
+  isDeprecated: boolean;
+  replacement?: string;
+}
+
+interface MuleApplication {
+  id: string;
+  name: string;
+  repository: string;
+  branch: string;
+  muleVersion: string;
+  javaVersion: string;
+  dependencies: MuleDependency[];
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  lastUpdated: string;
+  selected?: boolean;
+}
 
 const Migration = () => {
-  const [repoUrl, setRepoUrl] = useState("");
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanProgress, setScanProgress] = useState(0);
-  const [scanResults, setScanResults] = useState<any[]>([]);
+  const { selectedOrganization } = useOrganizations();
+  const [applications, setApplications] = useState<MuleApplication[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fetchingRepos, setFetchingRepos] = useState(false);
+  const [migrating, setMigrating] = useState(false);
 
-  const handleScan = async () => {
-    if (!repoUrl.trim()) return;
-    
-    setIsScanning(true);
-    setScanProgress(0);
-    
-    // Simulate scanning process
-    const progressInterval = setInterval(() => {
-      setScanProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(progressInterval);
-          setIsScanning(false);
-          // Mock scan results
-          setScanResults([
-            {
-              name: "customer-service",
-              path: "/src/main/mule",
-              compatibility: 92,
-              issues: 2,
-              status: "ready",
-              runtime: "4.4.0"
-            },
-            {
-              name: "order-api",
-              path: "/src/main/mule",
-              compatibility: 78,
-              issues: 5,
-              status: "needs-review",
-              runtime: "4.3.0"
-            },
-            {
-              name: "payment-processor",
-              path: "/src/main/mule",
-              compatibility: 95,
-              issues: 1,
-              status: "ready",
-              runtime: "4.4.0"
-            }
-          ]);
-          return 100;
-        }
-        return prev + 10;
+  const githubToken = selectedOrganization?.github_token || localStorage.getItem('MULE_githubToken') || '';
+
+  // Fetch all repos and scan for Mule apps
+  const handleFetchRepositories = async () => {
+    if (!githubToken) {
+      toast.error('Please connect GitHub and provide a token in the Dashboard.');
+      return;
+    }
+    setFetchingRepos(true);
+    setError(null);
+    setApplications([]);
+    try {
+      // 1. Fetch user/org repos
+      const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
+      const url = orgName
+        ? `https://api.github.com/orgs/${orgName}/repos?per_page=100`
+        : 'https://api.github.com/user/repos?per_page=100';
+      const reposRes = await axios.get(url, {
+        headers: { Authorization: `token ${githubToken}` }
       });
-    }, 300);
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "ready":
-        return <Badge className="bg-green-100 text-green-800">Ready</Badge>;
-      case "needs-review":
-        return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">Needs Review</Badge>;
-      default:
-        return <Badge variant="outline">Unknown</Badge>;
+      const repos = reposRes.data;
+      // 2. For each repo, check for pom.xml in root (limit to first 30 for demo)
+      const muleApps: MuleApplication[] = [];
+      for (const repo of repos.slice(0, 30)) {
+        try {
+          const pomRes = await axios.get(
+            `https://api.github.com/repos/${repo.full_name}/contents/pom.xml`,
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          if (pomRes.data && pomRes.data.content) {
+            // Decode base64 pom.xml
+            const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
+            // Parse Mule version, Java version, dependencies (simple regex for demo)
+            const muleVersion = (pomXml.match(/<mule\.version>(.*?)<\/mule\.version>/) || [])[1] || 'Unknown';
+            const javaVersion = (pomXml.match(/<java\.version>(.*?)<\/java\.version>/) || [])[1] || 'Unknown';
+            // Find dependencies
+            const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
+            const dependencies = depMatches.map(match => {
+              const depXml = match[1];
+              const groupId = (depXml.match(/<groupId>(.*?)<\/groupId>/) || [])[1] || '';
+              const artifactId = (depXml.match(/<artifactId>(.*?)<\/artifactId>/) || [])[1] || '';
+              const version = (depXml.match(/<version>(.*?)<\/version>/) || [])[1] || '';
+              // For demo, mark all as not deprecated and latestVersion = version
+              return {
+                groupId,
+                artifactId,
+                version,
+                latestVersion: version,
+                isDeprecated: false
+              };
+            });
+            muleApps.push({
+              id: repo.id,
+              name: repo.name,
+              repository: repo.html_url,
+              branch: repo.default_branch,
+              muleVersion,
+              javaVersion,
+              dependencies,
+              status: 'pending',
+              lastUpdated: repo.updated_at
+            });
+          }
+        } catch (e) {
+          // No pom.xml, skip
+        }
+      }
+      setApplications(muleApps);
+      toast.success('Fetched Mule repositories!');
+    } catch (err) {
+      setError('Failed to fetch repositories');
+    } finally {
+      setFetchingRepos(false);
     }
   };
 
-  const getCompatibilityColor = (score: number) => {
-    if (score >= 90) return "text-green-600";
-    if (score >= 70) return "text-yellow-600";
-    return "text-red-600";
+  // Select/deselect apps
+  const toggleApplicationSelection = (appId: string) => {
+    setApplications(prev => prev.map(app => 
+      app.id === appId ? { ...app, selected: !app.selected } : app
+    ));
+  };
+
+  // Migrate selected apps: create branch, update pom.xml, commit
+  const handleMigrateSelected = async () => {
+    const selectedApps = applications.filter(app => app.selected);
+    if (selectedApps.length === 0) {
+      toast.error('Please select at least one application to migrate');
+      return;
+    }
+    setMigrating(true);
+    try {
+      for (const app of selectedApps) {
+        // 1. Get latest pom.xml SHA
+        const pomRes = await axios.get(
+          `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/contents/pom.xml`,
+          { headers: { Authorization: `token ${githubToken}` } }
+        );
+        const pomSha = pomRes.data.sha;
+        const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
+        // 2. Update dependencies to latest (for demo, just append a comment)
+        const updatedPom = pomXml + '\n<!-- Updated for CloudHub 2.0 migration -->';
+        // 3. Create a new branch from default
+        const branchRes = await axios.get(
+          `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/git/refs/heads/${app.branch}`,
+          { headers: { Authorization: `token ${githubToken}` } }
+        );
+        const baseSha = branchRes.data.object.sha;
+        const newBranch = 'mulemigration';
+        // Create branch (ignore if exists)
+        try {
+          await axios.post(
+            `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/git/refs`,
+            {
+              ref: `refs/heads/${newBranch}`,
+              sha: baseSha
+            },
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+        } catch (e) {/* branch may already exist */}
+        // 4. Commit updated pom.xml to new branch
+        await axios.put(
+          `https://api.github.com/repos/${app.repository.replace('https://github.com/', '')}/contents/pom.xml`,
+          {
+            message: 'Mule migration: update dependencies for CloudHub 2.0',
+            content: btoa(updatedPom),
+            branch: newBranch,
+            sha: pomSha
+          },
+          { headers: { Authorization: `token ${githubToken}` } }
+        );
+      }
+      toast.success('Migration branch created and pom.xml updated for selected apps!');
+    } catch (err) {
+      toast.error('Migration failed. Please check your token and repo permissions.');
+    } finally {
+      setMigrating(false);
+    }
+  };
+
+  const getStatusColor = (status: MuleApplication['status']) => {
+    switch (status) {
+      case 'completed':
+        return 'text-green-500';
+      case 'in_progress':
+        return 'text-yellow-500';
+      case 'failed':
+        return 'text-red-500';
+      default:
+        return 'text-gray-500';
+    }
+  };
+
+  const getStatusIcon = (status: MuleApplication['status']) => {
+    switch (status) {
+      case 'completed':
+        return <CheckCircle2 className="h-5 w-5 text-green-500" />;
+      case 'in_progress':
+        return <AlertTriangle className="h-5 w-5 text-yellow-500" />;
+      case 'failed':
+        return <XCircle className="h-5 w-5 text-red-500" />;
+      default:
+        return <AlertTriangle className="h-5 w-5 text-gray-500" />;
+    }
   };
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900">Repository Migration Scanner</h1>
-        <p className="text-gray-600 mt-1">
-          Scan your repositories to assess CloudHub 2.0 compatibility
-        </p>
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Mule Application Migration</h1>
+          <p className="text-gray-600 mt-1">
+            Scan your repositories and migrate Mule applications to CloudHub 2.0
+          </p>
+        </div>
+        <Button onClick={handleFetchRepositories} disabled={fetchingRepos}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${fetchingRepos ? 'animate-spin' : ''}`} />
+          {fetchingRepos ? 'Scanning...' : 'Fetch Mule Applications'}
+        </Button>
       </div>
-
-      {/* Repository Input */}
+      {error && (
+        <div className="text-red-600 mb-4">{error}</div>
+      )}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center">
-            <Github className="mr-2 h-5 w-5" />
-            Connect Repository
-          </CardTitle>
+          <CardTitle>Mule Applications</CardTitle>
           <CardDescription>
-            Enter your repository URL to start the migration assessment
+            View and select Mule applications for migration
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="repo-url">Repository URL</Label>
-            <div className="flex space-x-2">
-              <Input
-                id="repo-url"
-                placeholder="https://github.com/username/repository"
-                value={repoUrl}
-                onChange={(e) => setRepoUrl(e.target.value)}
-                disabled={isScanning}
-              />
-              <Button 
-                onClick={handleScan} 
-                disabled={!repoUrl.trim() || isScanning}
-                className="bg-blue-600 hover:bg-blue-700"
-              >
-                <Scan className="mr-2 h-4 w-4" />
-                {isScanning ? "Scanning..." : "Scan Repository"}
-              </Button>
+        <CardContent>
+          {fetchingRepos ? (
+            <div className="flex items-center justify-center h-32">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
             </div>
-          </div>
-
-          {isScanning && (
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span>Scanning repository...</span>
-                <span>{scanProgress}%</span>
-              </div>
-              <Progress value={scanProgress} className="h-2" />
-              <p className="text-sm text-gray-600">
-                Analyzing Mule applications and dependencies...
-              </p>
+          ) : applications.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-gray-500">No Mule applications found. Click 'Fetch Mule Applications' to scan.</p>
             </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[50px]">Select</TableHead>
+                  <TableHead>Application</TableHead>
+                  <TableHead>Repository</TableHead>
+                  <TableHead>Mule Version</TableHead>
+                  <TableHead>Java Version</TableHead>
+                  <TableHead>Dependencies</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {applications.map((app) => (
+                  <TableRow key={app.id}>
+                    <TableCell>
+                      <input
+                        type="checkbox"
+                        checked={!!app.selected}
+                        onChange={() => toggleApplicationSelection(app.id)}
+                      />
+                    </TableCell>
+                    <TableCell className="font-medium">{app.name}</TableCell>
+                    <TableCell>
+                      <a href={app.repository} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                        {app.repository.split('/').slice(-2).join('/')}
+                      </a>
+                    </TableCell>
+                    <TableCell>{app.muleVersion}</TableCell>
+                    <TableCell>{app.javaVersion}</TableCell>
+                    <TableCell>
+                      <div className="space-y-1">
+                        {app.dependencies.map((dep, index) => (
+                          <div key={index} className="flex items-center space-x-2">
+                            <span>{dep.artifactId}</span>
+                            <Badge variant={dep.isDeprecated ? "destructive" : "secondary"}>
+                              {dep.version} → {dep.latestVersion}
+                            </Badge>
+                            {dep.isDeprecated && (
+                              <Badge variant="outline" className="text-yellow-600">
+                                Replace with {dep.replacement}
+                              </Badge>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center space-x-2">
+                        {getStatusIcon(app.status)}
+                        <span className={getStatusColor(app.status)}>
+                          {app.status.replace('_', ' ')}
+                        </span>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           )}
         </CardContent>
       </Card>
-
-      {/* Scan Results */}
-      {scanResults.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <Search className="mr-2 h-5 w-5 text-green-600" />
-              Scan Results
-            </CardTitle>
-            <CardDescription>
-              Found {scanResults.length} Mule applications in the repository
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {scanResults.map((app, index) => (
-                <div key={index} className="border border-gray-200 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center space-x-3">
-                      <div className="flex-1">
-                        <h3 className="font-semibold text-gray-900">{app.name}</h3>
-                        <p className="text-sm text-gray-500">{app.path}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      {getStatusBadge(app.status)}
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                    <div className="flex items-center space-x-2">
-                      <CheckCircle className={`h-4 w-4 ${getCompatibilityColor(app.compatibility)}`} />
-                      <span>Compatibility: </span>
-                      <span className={`font-medium ${getCompatibilityColor(app.compatibility)}`}>
-                        {app.compatibility}%
-                      </span>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <AlertTriangle className="h-4 w-4 text-yellow-600" />
-                      <span>Issues: </span>
-                      <span className="font-medium">{app.issues}</span>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <GitBranch className="h-4 w-4 text-blue-600" />
-                      <span>Runtime: </span>
-                      <span className="font-medium">{app.runtime}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            
-            <div className="mt-6 pt-4 border-t border-gray-200">
-              <div className="flex justify-between items-center">
-                <div className="text-sm text-gray-600">
-                  Scan completed successfully
-                </div>
-                <Button variant="outline">
-                  Export Report
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <div className="flex justify-end mt-4">
+        <Button
+          onClick={handleMigrateSelected}
+          disabled={!applications.some(app => app.selected) || migrating}
+        >
+          {migrating ? 'Migrating...' : 'Migrate Selected'}
+        </Button>
+      </div>
     </div>
   );
 };

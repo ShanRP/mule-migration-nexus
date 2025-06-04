@@ -1,230 +1,124 @@
-
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
-import { 
-  CheckCircle, 
-  Clock, 
-  AlertTriangle, 
-  Server, 
-  GitBranch, 
-  TrendingUp,
-  ArrowRight,
-  Building,
-  Users
-} from "lucide-react";
-import { useNavigate } from "react-router-dom";
-import { useOrganizations } from "@/providers/OrganizationProvider";
+import React, { useState } from 'react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
+import { Github, Cloud } from 'lucide-react';
+import { useOrganizations } from '@/providers/OrganizationProvider';
 
 const Dashboard = () => {
-  const navigate = useNavigate();
-  const { selectedOrganization, organizations, loading: orgLoading } = useOrganizations();
+  const { selectedOrganization, updateOrganization } = useOrganizations();
+  const [githubToken, setGithubToken] = useState('');
+  const [azureToken, setAzureToken] = useState('');
+  const [connecting, setConnecting] = useState<'github' | 'azure' | null>(null);
 
-  const stats = [
-    {
-      title: "Total Applications",
-      value: "24",
-      icon: Server,
-      color: "text-blue-600",
-      bgColor: "bg-blue-100"
-    },
-    {
-      title: "Ready for Migration",
-      value: "18",
-      icon: CheckCircle,
-      color: "text-green-600",
-      bgColor: "bg-green-100"
-    },
-    {
-      title: "Needs Review",
-      value: "4",
-      icon: AlertTriangle,
-      color: "text-yellow-600",
-      bgColor: "bg-yellow-100"
-    },
-    {
-      title: "In Progress",
-      value: "2",
-      icon: Clock,
-      color: "text-purple-600",
-      bgColor: "bg-purple-100"
+  const handleConnectGithub = async () => {
+    if (!githubToken.trim()) {
+      toast.error('Please enter a GitHub token');
+      return;
     }
-  ];
+    setConnecting('github');
+    await updateOrganization(selectedOrganization!.id, {
+      github_token: githubToken.trim(),
+      repository_type: 'github',
+    });
+    toast.success('GitHub token saved!');
+    setConnecting(null);
+  };
 
-  const recentScans = [
-    {
-      repo: "customer-api",
-      status: "completed",
-      compatibility: 95,
-      lastScan: "2 hours ago"
-    },
-    {
-      repo: "order-service",
-      status: "completed",
-      compatibility: 88,
-      lastScan: "4 hours ago"
-    },
-    {
-      repo: "payment-processor",
-      status: "in-progress",
-      compatibility: null,
-      lastScan: "Scanning..."
+  const handleConnectAzure = async () => {
+    if (!azureToken.trim()) {
+      toast.error('Please enter an Azure DevOps token');
+      return;
     }
-  ];
+    setConnecting('azure');
+    await updateOrganization(selectedOrganization!.id, {
+      azure_devops_token: azureToken.trim(),
+      repository_type: 'azure_devops',
+    });
+    toast.success('Azure DevOps token saved!');
+    setConnecting(null);
+  };
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <div className="flex items-center space-x-3 mb-2">
-            <h1 className="text-3xl font-bold text-gray-900">Migration Dashboard</h1>
-            {selectedOrganization && (
-              <div className="flex items-center space-x-2 px-3 py-1 bg-blue-50 rounded-full">
-                <Building className="h-4 w-4 text-blue-600" />
-                <span className="text-sm font-medium text-blue-800">{selectedOrganization.name}</span>
-              </div>
-            )}
-          </div>
-          <p className="text-gray-600 mt-1">
-            Monitor your CloudHub 1.0 to CloudHub 2.0 migration progress
-          </p>
-          {organizations.length > 1 && (
-            <p className="text-sm text-gray-500 mt-1">
-              Managing {organizations.length} organizations
-            </p>
-          )}
-        </div>
-        <Button onClick={() => navigate("/migration")} className="bg-blue-600 hover:bg-blue-700">
-          Start New Scan
-          <ArrowRight className="ml-2 h-4 w-4" />
-        </Button>
-      </div>
-
-      {/* Organization Stats */}
-      {selectedOrganization && (
-        <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center">
-                  <span className="text-white font-bold text-lg">{selectedOrganization.initial}</span>
+    <div className="container mx-auto p-6 flex flex-col items-center justify-center min-h-[60vh]">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle>Connect your Source Control</CardTitle>
+          <CardDescription>
+            Please connect your GitHub or Azure DevOps account to begin migration.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Tabs defaultValue="github" className="w-full">
+            <TabsList className="w-full grid grid-cols-2 mb-4">
+              <TabsTrigger value="github">
+                <Github className="h-4 w-4 mr-2" /> GitHub
+              </TabsTrigger>
+              <TabsTrigger value="azure">
+                <Cloud className="h-4 w-4 mr-2" /> Azure DevOps
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="github">
+              <div className="space-y-4">
+                <Input
+                  placeholder="GitHub Personal Access Token"
+                  value={githubToken}
+                  onChange={e => setGithubToken(e.target.value)}
+                  type="password"
+                />
+                <div className="text-xs text-gray-500">
+                  Need a token?{' '}
+                  <a
+                    href="https://github.com/settings/tokens"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline"
+                  >
+                    Generate a GitHub token
+                  </a>
                 </div>
-                <div>
-                  <h3 className="text-xl font-bold text-gray-900">{selectedOrganization.name}</h3>
-                  <div className="flex items-center space-x-4 text-sm text-gray-600">
-                    <span>Session: {selectedOrganization.session_timeout}</span>
-                    <span className="flex items-center">
-                      <Users className="h-4 w-4 mr-1" />
-                      Invite: {selectedOrganization.invite_enabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </div>
+                <Button
+                  onClick={handleConnectGithub}
+                  disabled={connecting === 'github'}
+                  className="w-full"
+                >
+                  {connecting === 'github' ? 'Connecting...' : 'Connect GitHub'}
+                </Button>
+              </div>
+            </TabsContent>
+            <TabsContent value="azure">
+              <div className="space-y-4">
+                <Input
+                  placeholder="Azure DevOps Personal Access Token"
+                  value={azureToken}
+                  onChange={e => setAzureToken(e.target.value)}
+                  type="password"
+                />
+                <div className="text-xs text-gray-500">
+                  Need a token?{' '}
+                  <a
+                    href="https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline"
+                  >
+                    Generate an Azure DevOps token
+                  </a>
                 </div>
+                <Button
+                  onClick={handleConnectAzure}
+                  disabled={connecting === 'azure'}
+                  className="w-full"
+                >
+                  {connecting === 'azure' ? 'Connecting...' : 'Connect Azure DevOps'}
+                </Button>
               </div>
-              <Badge variant="secondary" className="bg-blue-100 text-blue-800">
-                Active Organization
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {stats.map((stat, index) => (
-          <Card key={index} className="hover:shadow-md transition-shadow">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">{stat.title}</p>
-                  <p className="text-2xl font-bold text-gray-900 mt-1">{stat.value}</p>
-                </div>
-                <div className={`p-3 rounded-full ${stat.bgColor}`}>
-                  <stat.icon className={`h-6 w-6 ${stat.color}`} />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Migration Progress */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <TrendingUp className="mr-2 h-5 w-5 text-blue-600" />
-              Migration Progress
-            </CardTitle>
-            <CardDescription>
-              Overall progress across all applications
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <div className="flex justify-between text-sm mb-2">
-                <span>CloudHub 2.0 Compatibility</span>
-                <span className="font-medium">75%</span>
-              </div>
-              <Progress value={75} className="h-2" />
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-2">
-                <span>Migration Readiness</span>
-                <span className="font-medium">60%</span>
-              </div>
-              <Progress value={60} className="h-2" />
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-2">
-                <span>Documentation Coverage</span>
-                <span className="font-medium">40%</span>
-              </div>
-              <Progress value={40} className="h-2" />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Recent Scans */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <GitBranch className="mr-2 h-5 w-5 text-green-600" />
-              Recent Repository Scans
-            </CardTitle>
-            <CardDescription>
-              Latest compatibility scans and results
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {recentScans.map((scan, index) => (
-                <div key={index} className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
-                  <div className="flex items-center space-x-3">
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900">{scan.repo}</p>
-                      <p className="text-sm text-gray-500">{scan.lastScan}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    {scan.compatibility && (
-                      <Badge variant={scan.compatibility >= 90 ? "default" : scan.compatibility >= 70 ? "secondary" : "destructive"}>
-                        {scan.compatibility}% compatible
-                      </Badge>
-                    )}
-                    <Badge variant={scan.status === "completed" ? "default" : "secondary"}>
-                      {scan.status}
-                    </Badge>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <Button variant="outline" className="w-full mt-4" onClick={() => navigate("/applications")}>
-              View All Applications
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
     </div>
   );
 };

@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/components/AuthProvider';
@@ -10,6 +9,11 @@ export interface OrganizationOption {
   initial: string;
   session_timeout?: string;
   invite_enabled?: boolean;
+  github_url?: string | null;
+  github_token?: string | null;
+  azure_devops_url?: string | null;
+  azure_devops_token?: string | null;
+  repository_type: 'github' | 'azure_devops';
 }
 
 interface OrganizationContextType {
@@ -97,7 +101,12 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           name: organization.name,
           initial: organization.initial,
           session_timeout: organization.session_timeout,
-          invite_enabled: organization.invite_enabled
+          invite_enabled: organization.invite_enabled,
+          github_url: organization.github_url,
+          github_token: organization.github_token,
+          azure_devops_url: organization.azure_devops_url,
+          azure_devops_token: organization.azure_devops_token,
+          repository_type: organization.repository_type || 'github'
         }));
       } else {
         // Default organization should have been created by the trigger
@@ -110,7 +119,12 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
               name: 'Default Organization',
               initial: 'D',
               session_timeout: '30 days',
-              invite_enabled: false
+              invite_enabled: false,
+              github_url: null,
+              github_token: null,
+              azure_devops_url: null,
+              azure_devops_token: null,
+              repository_type: 'github'
             }
           ])
           .select()
@@ -123,7 +137,12 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           name: newOrganization.name,
           initial: newOrganization.initial,
           session_timeout: newOrganization.session_timeout,
-          invite_enabled: newOrganization.invite_enabled
+          invite_enabled: newOrganization.invite_enabled,
+          github_url: newOrganization.github_url,
+          github_token: newOrganization.github_token,
+          azure_devops_url: newOrganization.azure_devops_url,
+          azure_devops_token: newOrganization.azure_devops_token,
+          repository_type: newOrganization.repository_type || 'github'
         }];
       }
 
@@ -186,7 +205,12 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
             name,
             initial,
             session_timeout: '30 days',
-            invite_enabled: false
+            invite_enabled: false,
+            github_url: null,
+            github_token: null,
+            azure_devops_url: null,
+            azure_devops_token: null,
+            repository_type: 'github'
           }
         ])
         .select()
@@ -199,7 +223,12 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         name: data.name,
         initial: data.initial,
         session_timeout: data.session_timeout,
-        invite_enabled: data.invite_enabled
+        invite_enabled: data.invite_enabled,
+        github_url: data.github_url,
+        github_token: data.github_token,
+        azure_devops_url: data.azure_devops_url,
+        azure_devops_token: data.azure_devops_token,
+        repository_type: data.repository_type || 'github'
       };
 
       // Update organizations array with new organization

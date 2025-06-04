@@ -19,6 +19,11 @@ export type Database = {
           session_timeout: string | null
           updated_at: string
           user_id: string
+          github_url: string | null
+          github_token: string | null
+          azure_devops_url: string | null
+          azure_devops_token: string | null
+          repository_type: 'github' | 'azure_devops'
         }
         Insert: {
           created_at?: string
@@ -29,6 +34,11 @@ export type Database = {
           session_timeout?: string | null
           updated_at?: string
           user_id: string
+          github_url?: string | null
+          github_token?: string | null
+          azure_devops_url?: string | null
+          azure_devops_token?: string | null
+          repository_type?: 'github' | 'azure_devops'
         }
         Update: {
           created_at?: string
@@ -39,6 +49,11 @@ export type Database = {
           session_timeout?: string | null
           updated_at?: string
           user_id?: string
+          github_url?: string | null
+          github_token?: string | null
+          azure_devops_url?: string | null
+          azure_devops_token?: string | null
+          repository_type?: 'github' | 'azure_devops'
         }
         Relationships: []
       }
