@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -42,6 +43,82 @@ const Migration = () => {
 
   const githubToken = selectedOrganization?.github_token || localStorage.getItem('MULE_githubToken') || '';
 
+  const isMuleApplication = (pomXml: string): boolean => {
+    // Check for Mule-specific indicators in pom.xml
+    const muleIndicators = [
+      /<groupId>org\.mule\./,
+      /<artifactId>mule-/,
+      /<mule\.version>/,
+      /<packaging>mule-application<\/packaging>/,
+      /<packaging>mule<\/packaging>/,
+      /<plugin>[\s\S]*?<groupId>org\.mule\.tools\.maven<\/groupId>/,
+      /<dependency>[\s\S]*?<groupId>org\.mule\.connectors<\/groupId>/,
+      /<dependency>[\s\S]*?<groupId>org\.mule\.modules<\/groupId>/
+    ];
+
+    return muleIndicators.some(regex => regex.test(pomXml));
+  };
+
+  const extractMuleInfo = (pomXml: string) => {
+    // Extract Mule version with multiple patterns
+    const muleVersionPatterns = [
+      /<mule\.version>(.*?)<\/mule\.version>/,
+      /<version>(4\.\d+\.\d+)<\/version>[\s\S]*?<groupId>org\.mule/,
+      /<version>(3\.\d+\.\d+)<\/version>[\s\S]*?<groupId>org\.mule/
+    ];
+    
+    let muleVersion = 'Unknown';
+    for (const pattern of muleVersionPatterns) {
+      const match = pomXml.match(pattern);
+      if (match && match[1]) {
+        muleVersion = match[1];
+        break;
+      }
+    }
+
+    // Extract Java version
+    const javaVersionPatterns = [
+      /<java\.version>(.*?)<\/java\.version>/,
+      /<maven\.compiler\.source>(.*?)<\/maven\.compiler\.source>/,
+      /<maven\.compiler\.target>(.*?)<\/maven\.compiler\.target>/
+    ];
+    
+    let javaVersion = 'Unknown';
+    for (const pattern of javaVersionPatterns) {
+      const match = pomXml.match(pattern);
+      if (match && match[1]) {
+        javaVersion = match[1];
+        break;
+      }
+    }
+
+    // Extract Mule-specific dependencies
+    const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
+    const dependencies = depMatches
+      .map(match => {
+        const depXml = match[1];
+        const groupId = (depXml.match(/<groupId>(.*?)<\/groupId>/) || [])[1] || '';
+        const artifactId = (depXml.match(/<artifactId>(.*?)<\/artifactId>/) || [])[1] || '';
+        const version = (depXml.match(/<version>(.*?)<\/version>/) || [])[1] || '';
+        
+        return { groupId, artifactId, version };
+      })
+      .filter(dep => 
+        dep.groupId.includes('mule') || 
+        dep.artifactId.includes('mule') ||
+        dep.groupId.includes('org.mule')
+      )
+      .map(dep => ({
+        groupId: dep.groupId,
+        artifactId: dep.artifactId,
+        version: dep.version,
+        latestVersion: dep.version,
+        isDeprecated: false
+      }));
+
+    return { muleVersion, javaVersion, dependencies };
+  };
+
   // Fetch all repos and scan for Mule apps
   const handleFetchRepositories = async () => {
     if (!githubToken) {
@@ -51,66 +128,89 @@ const Migration = () => {
     setFetchingRepos(true);
     setError(null);
     setApplications([]);
+    
     try {
-      // 1. Fetch user/org repos
+      console.log('Starting repository scan from Migration...');
+      
+      // Fetch user/org repos with pagination
       const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
-      const url = orgName
-        ? `https://api.github.com/orgs/${orgName}/repos?per_page=100`
-        : 'https://api.github.com/user/repos?per_page=100';
-      const reposRes = await axios.get(url, {
-        headers: { Authorization: `token ${githubToken}` }
-      });
-      const repos = reposRes.data;
-      // 2. For each repo, check for pom.xml in root (limit to first 30 for demo)
+      let allRepos = [];
+      let page = 1;
+      const perPage = 100;
+      
+      while (true) {
+        const url = orgName
+          ? `https://api.github.com/orgs/${orgName}/repos?per_page=${perPage}&page=${page}`
+          : `https://api.github.com/user/repos?per_page=${perPage}&page=${page}`;
+        
+        console.log(`Fetching repositories page ${page}...`);
+        const reposRes = await axios.get(url, {
+          headers: { Authorization: `token ${githubToken}` }
+        });
+        
+        if (reposRes.data.length === 0) break;
+        allRepos.push(...reposRes.data);
+        page++;
+        
+        // Limit to prevent excessive API calls (adjust as needed)
+        if (page > 10) break;
+      }
+      
+      console.log(`Found ${allRepos.length} total repositories`);
+      
+      // Check each repo for Mule applications
       const muleApps: MuleApplication[] = [];
-      for (const repo of repos.slice(0, 30)) {
+      for (const repo of allRepos) {
         try {
+          console.log(`Checking repository: ${repo.name}`);
           const pomRes = await axios.get(
             `https://api.github.com/repos/${repo.full_name}/contents/pom.xml`,
             { headers: { Authorization: `token ${githubToken}` } }
           );
+          
           if (pomRes.data && pomRes.data.content) {
             // Decode base64 pom.xml
             const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
-            // Parse Mule version, Java version, dependencies (simple regex for demo)
-            const muleVersion = (pomXml.match(/<mule\.version>(.*?)<\/mule\.version>/) || [])[1] || 'Unknown';
-            const javaVersion = (pomXml.match(/<java\.version>(.*?)<\/java\.version>/) || [])[1] || 'Unknown';
-            // Find dependencies
-            const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
-            const dependencies = depMatches.map(match => {
-              const depXml = match[1];
-              const groupId = (depXml.match(/<groupId>(.*?)<\/groupId>/) || [])[1] || '';
-              const artifactId = (depXml.match(/<artifactId>(.*?)<\/artifactId>/) || [])[1] || '';
-              const version = (depXml.match(/<version>(.*?)<\/version>/) || [])[1] || '';
-              // For demo, mark all as not deprecated and latestVersion = version
-              return {
-                groupId,
-                artifactId,
-                version,
-                latestVersion: version,
-                isDeprecated: false
-              };
-            });
-            muleApps.push({
-              id: repo.id,
-              name: repo.name,
-              repository: repo.html_url,
-              branch: repo.default_branch,
-              muleVersion,
-              javaVersion,
-              dependencies,
-              status: 'pending',
-              lastUpdated: repo.updated_at
-            });
+            
+            // Check if it's actually a Mule application
+            if (isMuleApplication(pomXml)) {
+              console.log(`✓ Found Mule application: ${repo.name}`);
+              
+              const { muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+              
+              muleApps.push({
+                id: repo.id,
+                name: repo.name,
+                repository: repo.html_url,
+                branch: repo.default_branch,
+                muleVersion,
+                javaVersion,
+                dependencies,
+                status: 'pending',
+                lastUpdated: repo.updated_at
+              });
+            } else {
+              console.log(`✗ Not a Mule application: ${repo.name}`);
+            }
           }
         } catch (e) {
-          // No pom.xml, skip
+          // No pom.xml or access denied, skip silently
+          console.log(`No pom.xml found in ${repo.name}`);
         }
       }
+      
+      console.log(`Found ${muleApps.length} Mule applications`);
       setApplications(muleApps);
-      toast.success('Fetched Mule repositories!');
+      
+      if (muleApps.length > 0) {
+        toast.success(`Found ${muleApps.length} Mule application(s)!`);
+      } else {
+        toast.info('No Mule applications found in your repositories.');
+      }
     } catch (err) {
+      console.error('Repository scan error:', err);
       setError('Failed to fetch repositories');
+      toast.error('Failed to fetch repositories. Please check your token and permissions.');
     } finally {
       setFetchingRepos(false);
     }
@@ -272,19 +372,24 @@ const Migration = () => {
                     <TableCell>{app.javaVersion}</TableCell>
                     <TableCell>
                       <div className="space-y-1">
-                        {app.dependencies.map((dep, index) => (
+                        {app.dependencies.slice(0, 3).map((dep, index) => (
                           <div key={index} className="flex items-center space-x-2">
-                            <span>{dep.artifactId}</span>
-                            <Badge variant={dep.isDeprecated ? "destructive" : "secondary"}>
-                              {dep.version} → {dep.latestVersion}
+                            <span className="text-sm">{dep.artifactId}</span>
+                            <Badge variant={dep.isDeprecated ? "destructive" : "secondary"} className="text-xs">
+                              {dep.version}
                             </Badge>
-                            {dep.isDeprecated && (
-                              <Badge variant="outline" className="text-yellow-600">
+                            {dep.isDeprecated && dep.replacement && (
+                              <Badge variant="outline" className="text-yellow-600 text-xs">
                                 Replace with {dep.replacement}
                               </Badge>
                             )}
                           </div>
                         ))}
+                        {app.dependencies.length > 3 && (
+                          <div className="text-xs text-gray-500">
+                            +{app.dependencies.length - 3} more
+                          </div>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>
