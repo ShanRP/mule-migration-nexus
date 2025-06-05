@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import { Github, Cloud, RefreshCw } from 'lucide-react';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import RepositoryList from './RepositoryList';
-import { isMuleApplication, extractMuleInfo, analyzeMuleConfiguration, extractAzureOrganization } from '@/utils/muleDetection';
+import { isMuleApplication, extractMuleInfo, analyzeMuleConfiguration, extractAzureOrganization, getLatestMuleVersion, getLatestJavaVersion } from '@/utils/muleDetection';
 import { createAzureDevOpsAPI } from '@/utils/azureDevopsApi';
 import axios from 'axios';
 
@@ -549,6 +549,348 @@ const Dashboard = () => {
     }
   };
 
+  // Enhanced function to update dependency versions in POM XML
+  const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[]): string => {
+    let updatedPom = pomXml;
+    
+    // Update app.runtime version to latest
+    const latestMuleVersion = getLatestMuleVersion();
+    updatedPom = updatedPom.replace(
+      /<app\.runtime>.*?<\/app\.runtime>/g,
+      `<app.runtime>${latestMuleVersion}</app.runtime>`
+    );
+    console.log(`Updated app.runtime to ${latestMuleVersion}`);
+    
+    // Remove CloudHub dependencies
+    const cloudHubDepPatterns = [
+      /<dependency>\s*<groupId>org\.mule\.modules<\/groupId>\s*<artifactId>mule-module-cloudhub<\/artifactId>[\s\S]*?<\/dependency>/g,
+      /<dependency>\s*<groupId>org\.mule\.connectors<\/groupId>\s*<artifactId>mule-cloudhub-connector<\/artifactId>[\s\S]*?<\/dependency>/g,
+      /<dependency>[\s\S]*?<artifactId>[^<]*cloudhub[^<]*<\/artifactId>[\s\S]*?<\/dependency>/g,
+      /<dependency>\s*<groupId>com\.mulesoft\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g,
+      /<dependency>\s*<groupId>com\.mulesoft\.modules\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g
+    ];
+    
+    cloudHubDepPatterns.forEach(pattern => {
+      const matches = updatedPom.match(pattern);
+      if (matches) {
+        console.log('Found CloudHub dependencies to remove:', matches);
+        updatedPom = updatedPom.replace(pattern, '');
+      }
+    });
+    
+    // Update dependencies to their latest versions
+    dependencies.forEach(dep => {
+      if (dep.latestVersion && dep.latestVersion !== dep.version) {
+        console.log(`Updating ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
+        
+        const dependencyRegex = new RegExp(
+          `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
+          'g'
+        );
+        
+        updatedPom = updatedPom.replace(dependencyRegex, `$1${dep.latestVersion}$2`);
+      }
+    });
+    
+    // Clean up any double empty lines
+    updatedPom = updatedPom.replace(/\n\s*\n\s*\n/g, '\n\n');
+    
+    // Add migration comment
+    if (!updatedPom.includes('<!-- Updated for CloudHub 2.0 migration -->')) {
+      updatedPom = updatedPom + '\n<!-- Updated for CloudHub 2.0 migration -->';
+    }
+    
+    return updatedPom;
+  };
+
+  // Function to replace CloudHub connectors with Logger in XML files
+  const replaceCloudHubConnectors = (xmlContent: string): string => {
+    let updatedXml = xmlContent;
+    
+    console.log('Replacing CloudHub connectors with Logger connectors...');
+    
+    // Add Logger namespace if not present
+    if (!updatedXml.includes('xmlns:logger=')) {
+      const muleTag = updatedXml.match(/<mule[^>]*>/);
+      if (muleTag) {
+        const updatedMuleTag = muleTag[0].replace('>', ' xmlns:logger="http://www.mulesoft.org/schema/mule/logger" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/logger http://www.mulesoft.org/schema/mule/logger/current/mule-logger.xsd">');
+        updatedXml = updatedXml.replace(muleTag[0], updatedMuleTag);
+      }
+    }
+    
+    // Replace CloudHub connectors with Logger
+    const cloudHubPatterns = [
+      {
+        pattern: /<cloudhub:create-notification[^>]*>[\s\S]*?<\/cloudhub:create-notification>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub notification replaced with logger for CloudHub 2.0 migration" />'
+      },
+      {
+        pattern: /<cloudhub:create-notification[^>]*\/>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub notification replaced with logger for CloudHub 2.0 migration" />'
+      },
+      {
+        pattern: /<cloudhub:list-notifications[^>]*>[\s\S]*?<\/cloudhub:list-notifications>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub list notifications replaced with logger for CloudHub 2.0 migration" />'
+      },
+      {
+        pattern: /<cloudhub:list-notifications[^>]*\/>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub list notifications replaced with logger for CloudHub 2.0 migration" />'
+      },
+      {
+        pattern: /<cloudhub:get-application[^>]*>[\s\S]*?<\/cloudhub:get-application>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub get application replaced with logger for CloudHub 2.0 migration" />'
+      },
+      {
+        pattern: /<cloudhub:get-application[^>]*\/>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub get application replaced with logger for CloudHub 2.0 migration" />'
+      },
+      {
+        pattern: /<cloudhub:[^>]*>[\s\S]*?<\/cloudhub:[^>]*>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub operation replaced with logger for CloudHub 2.0 migration" />'
+      },
+      {
+        pattern: /<cloudhub:[^>]*\/>/g,
+        replacement: '<logger:log level="INFO" message="CloudHub operation replaced with logger for CloudHub 2.0 migration" />'
+      }
+    ];
+    
+    cloudHubPatterns.forEach(({ pattern, replacement }) => {
+      const matches = updatedXml.match(pattern);
+      if (matches) {
+        console.log('Found CloudHub connectors to replace:', matches);
+        updatedXml = updatedXml.replace(pattern, replacement);
+      }
+    });
+    
+    // Remove CloudHub namespace if no more CloudHub elements exist
+    if (!/<cloudhub:/.test(updatedXml)) {
+      updatedXml = updatedXml.replace(/xmlns:cloudhub="[^"]*"\s*/g, '');
+      updatedXml = updatedXml.replace(/http:\/\/www\.mulesoft\.org\/schema\/mule\/cloudhub[^\s]*/g, '');
+    }
+    
+    return updatedXml;
+  };
+
+  // GitHub migration function
+  const migrateGitHubApplication = async (app: MuleApplication) => {
+    console.log('Starting GitHub migration for app:', app.applicationName);
+    
+    const repoPath = app.repository.replace('https://github.com/', '');
+    const newBranch = 'mulemigration';
+    const githubToken = selectedOrganization?.github_token || '';
+    
+    // Get base branch SHA
+    const branchRes = await axios.get(
+      `https://api.github.com/repos/${repoPath}/git/refs/heads/${app.branch}`,
+      { headers: { Authorization: `token ${githubToken}` } }
+    );
+    const baseSha = branchRes.data.object.sha;
+    
+    // Create branch
+    try {
+      await axios.post(
+        `https://api.github.com/repos/${repoPath}/git/refs`,
+        {
+          ref: `refs/heads/${newBranch}`,
+          sha: baseSha
+        },
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
+    } catch (e) {
+      console.log('Branch may already exist, continuing...');
+    }
+    
+    // Update POM files
+    if (app.pomPaths) {
+      for (const pomPath of app.pomPaths) {
+        try {
+          const pomRes = await axios.get(
+            `https://api.github.com/repos/${repoPath}/contents/${pomPath}?ref=${app.branch}`,
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          const pomSha = pomRes.data.sha;
+          const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
+          
+          const updatedPom = updatePomDependencies(pomXml, app.dependencies);
+          
+          await axios.put(
+            `https://api.github.com/repos/${repoPath}/contents/${pomPath}`,
+            {
+              message: `Mule migration: update dependencies for CloudHub 2.0 - ${pomPath}`,
+              content: btoa(updatedPom),
+              branch: newBranch,
+              sha: pomSha
+            },
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          console.log('Successfully updated:', pomPath);
+        } catch (error) {
+          console.error(`Failed to update ${pomPath}:`, error);
+        }
+      }
+    }
+    
+    // Update artifact JSON files
+    if (app.artifactJsonPaths) {
+      for (const ajPath of app.artifactJsonPaths) {
+        try {
+          const ajRes = await axios.get(
+            `https://api.github.com/repos/${repoPath}/contents/${ajPath}?ref=${app.branch}`,
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          const ajSha = ajRes.data.sha;
+          const ajJson = JSON.parse(atob(ajRes.data.content.replace(/\n/g, '')));
+          
+          const updatedAj = { 
+            ...ajJson,
+            javaSpecificationVersions: [getLatestJavaVersion()],
+            minMuleVersion: getLatestMuleVersion()
+          };
+          
+          await axios.put(
+            `https://api.github.com/repos/${repoPath}/contents/${ajPath}`,
+            {
+              message: `Mule migration: update artifact configuration for CloudHub 2.0 - ${ajPath}`,
+              content: btoa(JSON.stringify(updatedAj, null, 2)),
+              branch: newBranch,
+              sha: ajSha
+            },
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          console.log('Successfully updated:', ajPath);
+        } catch (error) {
+          console.error(`Failed to update ${ajPath}:`, error);
+        }
+      }
+    }
+    
+    // Update project XML files
+    if (app.projectXmlPaths) {
+      for (const xmlPath of app.projectXmlPaths) {
+        try {
+          const xmlRes = await axios.get(
+            `https://api.github.com/repos/${repoPath}/contents/${xmlPath}?ref=${app.branch}`,
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          const xmlSha = xmlRes.data.sha;
+          const xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
+          
+          const updatedXml = replaceCloudHubConnectors(xmlContent) + '\n<!-- Updated for CloudHub 2.0 migration -->';
+          
+          await axios.put(
+            `https://api.github.com/repos/${repoPath}/contents/${xmlPath}`,
+            {
+              message: `Mule migration: update connectors for CloudHub 2.0 - ${xmlPath}`,
+              content: btoa(updatedXml),
+              branch: newBranch,
+              sha: xmlSha
+            },
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          console.log('Successfully updated:', xmlPath);
+        } catch (error) {
+          console.error(`Failed to update ${xmlPath}:`, error);
+        }
+      }
+    }
+  };
+
+  // Azure DevOps migration function
+  const migrateAzureApplication = async (app: MuleApplication) => {
+    try {
+      console.log('Starting Azure DevOps migration for app:', app.applicationName);
+      
+      const urlParts = app.repository.split('/');
+      const organization = urlParts[3];
+      const project = urlParts[4];
+      const repoId = app.id;
+      const azureToken = selectedOrganization?.azure_devops_token || '';
+      const azureApi = createAzureDevOpsAPI(organization, azureToken);
+      
+      // Create migration branch
+      console.log(`Creating migration branch for ${app.name}...`);
+      const branchCreated = await azureApi.createBranch(project, repoId, 'mulemigration', app.branch);
+      if (!branchCreated) {
+        throw new Error('Failed to create migration branch. Please check your PAT permissions.');
+      }
+      
+      const filesToCommit = [];
+      
+      // Update POM files
+      if (app.pomPaths) {
+        console.log(`Updating POM files for ${app.name}...`);
+        for (const pomPath of app.pomPaths) {
+          let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
+          if (pomXml && typeof pomXml === 'string') {
+            const updatedPom = updatePomDependencies(pomXml, app.dependencies);
+            filesToCommit.push({ path: pomPath, content: updatedPom });
+          }
+        }
+      }
+      
+      // Update artifact JSON files
+      if (app.artifactJsonPaths) {
+        console.log(`Updating artifact JSON files for ${app.name}...`);
+        for (const ajPath of app.artifactJsonPaths) {
+          let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
+          let ajJson: Record<string, any> = {};
+          
+          if (ajContent && typeof ajContent === 'string') {
+            try {
+              ajJson = JSON.parse(ajContent);
+            } catch (e) {
+              console.warn('Invalid JSON in artifact JSON, creating new:', e);
+              ajJson = {};
+            }
+          }
+          
+          const updatedAj = { 
+            ...ajJson,
+            javaSpecificationVersions: [getLatestJavaVersion()],
+            minMuleVersion: getLatestMuleVersion()
+          };
+          
+          filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
+        }
+      }
+      
+      // Update project XML files
+      if (app.projectXmlPaths) {
+        console.log(`Updating project XML files for ${app.name}...`);
+        for (const xmlPath of app.projectXmlPaths) {
+          let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
+          if (xmlContent && typeof xmlContent === 'string') {
+            const updatedXml = replaceCloudHubConnectors(xmlContent) + '\n<!-- Updated for CloudHub 2.0 migration -->';
+            filesToCommit.push({ path: xmlPath, content: updatedXml });
+          }
+        }
+      }
+      
+      // Commit all changes
+      if (filesToCommit.length > 0) {
+        console.log(`Committing ${filesToCommit.length} files for ${app.name}...`);
+        const committed = await azureApi.commitFiles(
+          project,
+          repoId,
+          'mulemigration',
+          filesToCommit,
+          'Mule migration: update for CloudHub 2.0'
+        );
+        if (!committed) {
+          throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
+        }
+        console.log(`Successfully migrated ${app.name}`);
+        return true;
+      } else {
+        console.warn(`No files to commit for ${app.name}`);
+        return false;
+      }
+    } catch (error) {
+      console.error(`Error migrating Azure DevOps application ${app.name}:`, error);
+      throw error;
+    }
+  };
+
   const handleMigrateAll = async () => {
     const selectedApps = applications.filter(app => app.selected);
     if (selectedApps.length === 0) {
@@ -556,17 +898,72 @@ const Dashboard = () => {
       return;
     }
     
+    const repositoryType = selectedOrganization?.repository_type;
+    
+    if (!repositoryType) {
+      toast.error('Repository type not configured');
+      return;
+    }
+    
     setMigrating(true);
+    
     try {
+      let successCount = 0;
+      let failureCount = 0;
+      
       for (const app of selectedApps) {
-        // Perform migration for each selected app
-        // This is a placeholder - the actual migration logic would be implemented
-        console.log(`Migrating ${app.applicationName}...`);
+        try {
+          console.log(`Starting migration for: ${app.applicationName}`);
+          
+          // Update application status to in_progress
+          setApplications(prev => prev.map(a => 
+            a.id === app.id 
+              ? { ...a, status: 'in_progress', lastUpdated: new Date().toISOString() }
+              : a
+          ));
+          
+          if (repositoryType === 'github') {
+            await migrateGitHubApplication(app);
+          } else if (repositoryType === 'azure_devops') {
+            await migrateAzureApplication(app);
+          }
+          
+          // Update application status to completed
+          setApplications(prev => prev.map(a => 
+            a.id === app.id 
+              ? { ...a, status: 'completed', lastUpdated: new Date().toISOString() }
+              : a
+          ));
+          
+          successCount++;
+          console.log(`Successfully migrated: ${app.applicationName}`);
+          
+        } catch (error) {
+          console.error(`Failed to migrate ${app.applicationName}:`, error);
+          
+          // Update application status to failed
+          setApplications(prev => prev.map(a => 
+            a.id === app.id 
+              ? { ...a, status: 'failed', lastUpdated: new Date().toISOString() }
+              : a
+          ));
+          
+          failureCount++;
+        }
       }
-      toast.success(`Migration initiated for ${selectedApps.length} application(s)!`);
+      
+      // Show final results
+      if (successCount > 0 && failureCount === 0) {
+        toast.success(`Successfully migrated all ${successCount} selected application(s)!`);
+      } else if (successCount > 0 && failureCount > 0) {
+        toast.warning(`Migration completed: ${successCount} successful, ${failureCount} failed`);
+      } else {
+        toast.error(`Migration failed for all ${failureCount} selected application(s)`);
+      }
+      
     } catch (error) {
       console.error('Migration error:', error);
-      toast.error('Migration failed. Please try again.');
+      toast.error('Migration process failed. Please try again.');
     } finally {
       setMigrating(false);
     }
