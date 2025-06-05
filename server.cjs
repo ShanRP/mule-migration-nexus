@@ -65,37 +65,53 @@ app.post('/api/azure/listFiles', async (req, res) => {
   }
 });
 
-// Get file content
+// Get file content - Fixed to always return string content
 app.post('/api/azure/fileContent', async (req, res) => {
   const { organization, project, repositoryId, filePath, token } = req.body;
   if (!organization || !project || !repositoryId || !filePath || !token) return res.status(400).json({ error: 'Missing params' });
   try {
+    console.log(`Fetching file content for: ${filePath}`);
     const response = await axios.get(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?path=${encodeURIComponent('/' + filePath)}&api-version=7.0`,
       { headers: { 'Authorization': getAzureAuthHeader(token), 'Accept': 'text/plain' } }
     );
-    res.json({ content: response.data });
+    
+    // Ensure we always return a string
+    let content = response.data;
+    if (typeof content !== 'string') {
+      content = String(content);
+    }
+    
+    console.log(`File content type: ${typeof content}, length: ${content.length}`);
+    res.json({ content });
   } catch (err) {
+    console.error(`Error fetching file ${filePath}:`, err.message);
     res.status(err.response?.status || 500).json({ error: err.message });
   }
 });
 
-// Create branch - Fixed API call format
+// Create branch - Fixed API call with proper repository reference
 app.post('/api/azure/createBranch', async (req, res) => {
   const { organization, project, repositoryId, branchName, sourceBranch, token } = req.body;
   if (!organization || !project || !repositoryId || !branchName || !sourceBranch || !token) return res.status(400).json({ error: 'Missing params' });
   try {
-    // Get the source branch commit first
+    console.log(`Creating branch ${branchName} from ${sourceBranch} in repo ${repositoryId}`);
+    
+    // First, get the source branch commit
     const branchResponse = await axios.get(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/refs?filter=heads/${sourceBranch}&api-version=7.0`,
       { headers: { 'Authorization': getAzureAuthHeader(token), 'Accept': 'application/json' } }
     );
+    
     if (!branchResponse.data || !branchResponse.data.value || branchResponse.data.value.length === 0) {
+      console.error(`Source branch ${sourceBranch} not found`);
       return res.json({ success: false, error: 'Source branch not found' });
     }
-    const sourceCommitId = branchResponse.data.value[0].objectId;
     
-    // Create new branch with correct API format
+    const sourceCommitId = branchResponse.data.value[0].objectId;
+    console.log(`Source commit ID: ${sourceCommitId}`);
+    
+    // Create new branch with correct format
     const createBranchPayload = [
       {
         name: `refs/heads/${branchName}`,
@@ -104,7 +120,9 @@ app.post('/api/azure/createBranch', async (req, res) => {
       }
     ];
     
-    await axios.post(
+    console.log('Creating branch with payload:', createBranchPayload);
+    
+    const createResponse = await axios.post(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/refs?api-version=7.0`,
       createBranchPayload,
       { 
@@ -115,31 +133,45 @@ app.post('/api/azure/createBranch', async (req, res) => {
         } 
       }
     );
+    
+    console.log('Branch creation successful:', createResponse.status);
     res.json({ success: true });
   } catch (err) {
+    console.error('Branch creation error details:', {
+      status: err.response?.status,
+      data: err.response?.data,
+      message: err.message
+    });
+    
     if (err.response && err.response.status === 409) {
       // Branch already exists
+      console.log('Branch already exists, continuing...');
       return res.json({ success: true });
     }
-    console.error('Branch creation error:', err.response?.data || err.message);
-    res.status(err.response?.status || 500).json({ error: err.message });
+    res.status(err.response?.status || 500).json({ error: err.message, details: err.response?.data });
   }
 });
 
-// Commit files - Improved error handling
+// Commit files - Improved error handling and logging
 app.post('/api/azure/commitFiles', async (req, res) => {
   const { organization, project, repositoryId, branchName, files, message, token } = req.body;
   if (!organization || !project || !repositoryId || !branchName || !files || !message || !token) return res.status(400).json({ error: 'Missing params' });
   try {
+    console.log(`Committing ${files.length} files to branch ${branchName}`);
+    
     // Get the latest commit on the branch
     const branchResponse = await axios.get(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/refs?filter=heads/${branchName}&api-version=7.0`,
       { headers: { 'Authorization': getAzureAuthHeader(token), 'Accept': 'application/json' } }
     );
+    
     if (!branchResponse.data || !branchResponse.data.value || branchResponse.data.value.length === 0) {
+      console.error(`Branch ${branchName} not found for commit`);
       return res.json({ success: false, error: 'Branch not found' });
     }
+    
     const branchObjectId = branchResponse.data.value[0].objectId;
+    console.log(`Branch ${branchName} object ID: ${branchObjectId}`);
     
     const changes = files.map(file => ({
       changeType: 'edit',
@@ -152,7 +184,9 @@ app.post('/api/azure/commitFiles', async (req, res) => {
       commits: [{ comment: message, changes }]
     };
     
-    await axios.post(
+    console.log('Committing with payload:', JSON.stringify(pushPayload, null, 2));
+    
+    const pushResponse = await axios.post(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/pushes?api-version=7.0`,
       pushPayload,
       { 
@@ -163,10 +197,16 @@ app.post('/api/azure/commitFiles', async (req, res) => {
         } 
       }
     );
+    
+    console.log('Commit successful:', pushResponse.status);
     res.json({ success: true });
   } catch (err) {
-    console.error('Commit files error:', err.response?.data || err.message);
-    res.status(err.response?.status || 500).json({ error: err.message });
+    console.error('Commit files error details:', {
+      status: err.response?.status,
+      data: err.response?.data,
+      message: err.message
+    });
+    res.status(err.response?.status || 500).json({ error: err.message, details: err.response?.data });
   }
 });
 
