@@ -116,7 +116,7 @@ const Migration = () => {
           const pomXml = await fetchGitHubFileContent(repo.full_name, pomPath, token);
           if (!pomXml || !isMuleApplication(pomXml)) continue;
           
-          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = await extractMuleInfo(pomXml);
           
           let connectors: any[] = [];
           try {
@@ -217,7 +217,7 @@ const Migration = () => {
               continue;
             }
             
-            const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+            const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = await extractMuleInfo(pomXml);
             
             let connectors: any[] = [];
             const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
