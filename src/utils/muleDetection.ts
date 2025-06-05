@@ -14,6 +14,8 @@ interface MuleConnector {
   cloudHub2Alternative?: string;
 }
 
+import MuleSoftExchangeService from '../services/mulesoftExchangeApi';
+
 export const isMuleApplication = (pomXml: string): boolean => {
   console.log('Checking if application is Mule...');
   
@@ -62,7 +64,7 @@ export const isMuleApplication = (pomXml: string): boolean => {
   return isMatch;
 };
 
-export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
+export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
   console.log('Extracting Mule information...');
   console.log('Artifact JSON received:', artifactJson);
 
@@ -157,9 +159,9 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
   
   console.log(`Final extracted Java version: ${javaVersion}`);
 
-  // Dependencies (as before)
+  // Dependencies - extract first, then get latest versions
   const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
-  const dependencies = depMatches
+  const basicDependencies = depMatches
     .map(match => {
       const depXml = match[1];
       const groupId = (depXml.match(/<groupId>(.*?)<\/groupId>/) || [])[1] || '';
@@ -172,20 +174,10 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
       dep.artifactId.includes('mule') ||
       dep.groupId.includes('org.mule') ||
       dep.groupId.includes('com.mulesoft')
-    )
-    .map(dep => {
-      const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
-      const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
-      const latestVersion = getLatestVersion(dep.groupId, dep.artifactId, dep.version);
-      return {
-        groupId: dep.groupId,
-        artifactId: dep.artifactId,
-        version: dep.version,
-        latestVersion,
-        isDeprecated,
-        replacement
-      };
-    });
+    );
+
+  // Get latest versions using MuleSoft Exchange API
+  const dependencies = await getLatestVersionsForDependencies(basicDependencies);
 
   console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies });
   return { applicationName, muleRuntime, muleVersion, javaVersion, dependencies };
@@ -321,6 +313,65 @@ const getReplacementDependency = (groupId: string, artifactId: string): string |
   return replacements[artifactId];
 };
 
+// Updated function to use MuleSoft Exchange API
+const getLatestVersion = async (groupId: string, artifactId: string, currentVersion: string): Promise<string> => {
+  try {
+    const exchangeService = new MuleSoftExchangeService();
+    const latestVersion = await exchangeService.getConnectorLatestVersion(groupId, artifactId);
+    
+    if (latestVersion && latestVersion !== 'Unknown') {
+      return latestVersion;
+    }
+  } catch (error) {
+    console.error(`Failed to get latest version from Exchange for ${artifactId}:`, error);
+  }
+  
+  // Fallback to static versions if Exchange API fails
+  return latestConnectorVersions[artifactId] || currentVersion;
+};
+
+// Enhanced function to get latest versions for all dependencies
+export const getLatestVersionsForDependencies = async (dependencies: Array<{groupId: string, artifactId: string, version: string}>) => {
+  try {
+    const exchangeService = new MuleSoftExchangeService();
+    const latestVersions = await exchangeService.getLatestVersionForPomDependencies(dependencies);
+    
+    // Update dependencies with latest versions
+    return dependencies.map(dep => {
+      const latestVersion = latestVersions[dep.artifactId] || dep.version;
+      const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
+      const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
+      
+      return {
+        groupId: dep.groupId,
+        artifactId: dep.artifactId,
+        version: dep.version,
+        latestVersion,
+        isDeprecated,
+        replacement
+      };
+    });
+  } catch (error) {
+    console.error('Failed to get latest versions from MuleSoft Exchange:', error);
+    
+    // Fallback to static versions
+    return dependencies.map(dep => {
+      const latestVersion = latestConnectorVersions[dep.artifactId] || dep.version;
+      const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
+      const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
+      
+      return {
+        groupId: dep.groupId,
+        artifactId: dep.artifactId,
+        version: dep.version,
+        latestVersion,
+        isDeprecated,
+        replacement
+      };
+    });
+  }
+};
+
 const latestConnectorVersions: Record<string, string> = {
   'mule-marketo-connector': '3.0.9',
   'mule-oauth-module': '1.1.21',
@@ -373,10 +424,6 @@ const latestConnectorVersions: Record<string, string> = {
   'mule-twilio-connector': '4.2.9',
   'mule-sockets-connector': '1.2.5',
   'mule-xml-module': '1.4.2',
-};
-
-const getLatestVersion = (groupId: string, artifactId: string, currentVersion: string): string => {
-  return latestConnectorVersions[artifactId] || currentVersion;
 };
 
 const isDeprecatedConnector = (namespace: string): boolean => {
