@@ -1,4 +1,3 @@
-
 interface MuleDependency {
   groupId: string;
   artifactId: string;

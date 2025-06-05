@@ -1,4 +1,3 @@
-
 import axios from 'axios';
 
 const AZURE_PROXY_BASE = 'http://localhost:3031/api/azure';
@@ -111,7 +110,6 @@ export class AzureDevOpsAPI {
 
   async getFileContent(projectName: string, repositoryId: string, filePath: string): Promise<string | null> {
     try {
-      console.log(`Fetching file content for: ${filePath}`);
       const response = await axios.post(`${AZURE_PROXY_BASE}/fileContent`, {
         organization: this.organization,
         project: projectName,
@@ -120,20 +118,17 @@ export class AzureDevOpsAPI {
         token: this.token
       });
       if (response.data && typeof response.data.content === 'string') {
-        console.log(`Successfully fetched content for: ${filePath} (${response.data.content.length} characters)`);
         return response.data.content;
       }
-      console.log(`No content found for: ${filePath}`);
       return null;
     } catch (error) {
-      console.error(`Error fetching file content for ${filePath}:`, error);
+      console.error('Error fetching file content:', error);
       return null;
     }
   }
 
   async createBranch(projectName: string, repositoryId: string, branchName: string, sourceBranch: string): Promise<boolean> {
     try {
-      console.log(`Creating branch ${branchName} from ${sourceBranch}`);
       const response = await axios.post(`${AZURE_PROXY_BASE}/createBranch`, {
         organization: this.organization,
         project: projectName,
@@ -142,27 +137,15 @@ export class AzureDevOpsAPI {
         sourceBranch,
         token: this.token
       });
-      const success = response.data && response.data.success;
-      console.log(`Branch creation ${success ? 'succeeded' : 'failed'}`);
-      return success;
+      return response.data && response.data.success;
     } catch (error) {
       console.error('Error creating branch:', error);
-      if (axios.isAxiosError(error)) {
-        if (error.response?.status === 401 || error.response?.status === 403) {
-          console.error('Insufficient permissions for branch creation');
-        }
-      }
       return false;
     }
   }
 
   async commitFiles(projectName: string, repositoryId: string, branchName: string, files: Array<{path: string, content: string}>, message: string): Promise<boolean> {
     try {
-      console.log(`Committing ${files.length} files to branch ${branchName}`);
-      files.forEach(file => {
-        console.log(`- ${file.path} (${file.content.length} characters)`);
-      });
-      
       const response = await axios.post(`${AZURE_PROXY_BASE}/commitFiles`, {
         organization: this.organization,
         project: projectName,
@@ -172,27 +155,10 @@ export class AzureDevOpsAPI {
         message,
         token: this.token
       });
-      
-      const success = response.data && response.data.success;
-      console.log(`Commit ${success ? 'succeeded' : 'failed'}`);
-      
-      if (!success && response.data?.error) {
-        console.error('Commit error details:', response.data.error);
-        throw new Error(response.data.error);
-      }
-      
-      return success;
+      return response.data && response.data.success;
     } catch (error) {
       console.error('Error committing files:', error);
-      if (axios.isAxiosError(error)) {
-        if (error.response?.status === 401 || error.response?.status === 403) {
-          throw new Error('Insufficient permissions to commit files. Please ensure your PAT has Code (read & write) permissions.');
-        }
-        if (error.response?.data?.error) {
-          throw new Error(error.response.data.error);
-        }
-      }
-      throw error;
+      return false;
     }
   }
 }
