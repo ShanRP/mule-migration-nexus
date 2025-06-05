@@ -1,3 +1,4 @@
+
 import axios from 'axios';
 
 const AZURE_PROXY_BASE = 'http://localhost:3031/api/azure';
@@ -99,6 +100,7 @@ export class AzureDevOpsAPI {
         token: this.token
       });
       if (response.data && Array.isArray(response.data.files)) {
+        console.log(`Found ${response.data.files.length} files in repository`);
         return response.data.files;
       }
       return [];
@@ -110,6 +112,7 @@ export class AzureDevOpsAPI {
 
   async getFileContent(projectName: string, repositoryId: string, filePath: string): Promise<string | null> {
     try {
+      console.log(`Fetching file content for: ${filePath}`);
       const response = await axios.post(`${AZURE_PROXY_BASE}/fileContent`, {
         organization: this.organization,
         project: projectName,
@@ -118,17 +121,20 @@ export class AzureDevOpsAPI {
         token: this.token
       });
       if (response.data && typeof response.data.content === 'string') {
+        console.log(`Successfully fetched content for: ${filePath}`);
         return response.data.content;
       }
+      console.log(`No content found for: ${filePath}`);
       return null;
     } catch (error) {
-      console.error('Error fetching file content:', error);
+      console.error(`Error fetching file content for ${filePath}:`, error);
       return null;
     }
   }
 
   async createBranch(projectName: string, repositoryId: string, branchName: string, sourceBranch: string): Promise<boolean> {
     try {
+      console.log(`Creating branch ${branchName} from ${sourceBranch}...`);
       const response = await axios.post(`${AZURE_PROXY_BASE}/createBranch`, {
         organization: this.organization,
         project: projectName,
@@ -137,7 +143,9 @@ export class AzureDevOpsAPI {
         sourceBranch,
         token: this.token
       });
-      return response.data && response.data.success;
+      const success = response.data && response.data.success;
+      console.log(`Branch creation ${success ? 'successful' : 'failed'}`);
+      return success;
     } catch (error) {
       console.error('Error creating branch:', error);
       return false;
@@ -146,6 +154,7 @@ export class AzureDevOpsAPI {
 
   async commitFiles(projectName: string, repositoryId: string, branchName: string, files: Array<{path: string, content: string}>, message: string): Promise<boolean> {
     try {
+      console.log(`Committing ${files.length} files to branch ${branchName}...`);
       const response = await axios.post(`${AZURE_PROXY_BASE}/commitFiles`, {
         organization: this.organization,
         project: projectName,
@@ -155,11 +164,49 @@ export class AzureDevOpsAPI {
         message,
         token: this.token
       });
-      return response.data && response.data.success;
+      const success = response.data && response.data.success;
+      console.log(`File commit ${success ? 'successful' : 'failed'}`);
+      return success;
     } catch (error) {
       console.error('Error committing files:', error);
       return false;
     }
+  }
+
+  // Enhanced method to discover and categorize files
+  async discoverProjectFiles(projectName: string, repositoryId: string): Promise<{
+    pomPaths: string[];
+    artifactJsonPaths: string[];
+    projectXmlPaths: string[];
+  }> {
+    console.log('Discovering project files for Azure DevOps repository...');
+    
+    const pomPaths: string[] = [];
+    const artifactJsonPaths: string[] = [];
+    const projectXmlPaths: string[] = [];
+
+    try {
+      const allFiles = await this.listFiles(projectName, repositoryId);
+      console.log(`Analyzing ${allFiles.length} files for Mule artifacts...`);
+
+      allFiles.forEach(filePath => {
+        if (filePath.endsWith('pom.xml')) {
+          pomPaths.push(filePath);
+          console.log(`Found POM file: ${filePath}`);
+        } else if (filePath.endsWith('mule-artifact.json')) {
+          artifactJsonPaths.push(filePath);
+          console.log(`Found artifact JSON file: ${filePath}`);
+        } else if (filePath.endsWith('.xml') && filePath.includes('src/main/mule/')) {
+          projectXmlPaths.push(filePath);
+          console.log(`Found project XML file: ${filePath}`);
+        }
+      });
+    } catch (error) {
+      console.error('Error discovering project files:', error);
+    }
+
+    console.log('File discovery results:', { pomPaths, artifactJsonPaths, projectXmlPaths });
+    return { pomPaths, artifactJsonPaths, projectXmlPaths };
   }
 }
 

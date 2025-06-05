@@ -18,12 +18,15 @@ app.post('/api/azure/projects', async (req, res) => {
   const { organization, token } = req.body;
   if (!organization || !token) return res.status(400).json({ error: 'Missing organization or token' });
   try {
+    console.log(`Fetching projects for organization: ${organization}`);
     const response = await axios.get(
       `https://dev.azure.com/${organization}/_apis/projects?api-version=7.0`,
       { headers: { 'Authorization': getAzureAuthHeader(token), 'Accept': 'application/json' } }
     );
+    console.log(`Successfully fetched ${response.data.value?.length || 0} projects`);
     res.json(response.data);
   } catch (err) {
+    console.error('Error fetching projects:', err.response?.data || err.message);
     res.status(err.response?.status || 500).json({ error: err.message });
   }
 });
@@ -33,21 +36,25 @@ app.post('/api/azure/repositories', async (req, res) => {
   const { organization, project, token } = req.body;
   if (!organization || !project || !token) return res.status(400).json({ error: 'Missing params' });
   try {
+    console.log(`Fetching repositories for project: ${project}`);
     const response = await axios.get(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories?api-version=7.0`,
       { headers: { 'Authorization': getAzureAuthHeader(token), 'Accept': 'application/json' } }
     );
+    console.log(`Successfully fetched ${response.data.value?.length || 0} repositories`);
     res.json(response.data);
   } catch (err) {
+    console.error('Error fetching repositories:', err.response?.data || err.message);
     res.status(err.response?.status || 500).json({ error: err.message });
   }
 });
 
-// List files in a repository
+// Enhanced list files endpoint with better filtering
 app.post('/api/azure/listFiles', async (req, res) => {
   const { organization, project, repositoryId, token } = req.body;
   if (!organization || !project || !repositoryId || !token) return res.status(400).json({ error: 'Missing params' });
   try {
+    console.log(`Listing files for repository: ${repositoryId} in project: ${project}`);
     const response = await axios.get(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?recursionLevel=Full&api-version=7.0`,
       { headers: { 'Authorization': getAzureAuthHeader(token), 'Accept': 'application/json' } }
@@ -55,45 +62,73 @@ app.post('/api/azure/listFiles', async (req, res) => {
     if (response.data && response.data.value) {
       const files = response.data.value
         .filter(item => !item.isFolder && item.path && !item.path.includes('/target/'))
-        .map(item => item.path.substring(1));
+        .map(item => item.path.substring(1)); // Remove leading slash
+      
+      console.log(`Found ${files.length} files (excluding folders and target directories)`);
+      
+      // Log Mule-specific files for debugging
+      const muleFiles = files.filter(file => 
+        file.endsWith('pom.xml') || 
+        file.endsWith('mule-artifact.json') || 
+        (file.endsWith('.xml') && file.includes('src/main/mule/'))
+      );
+      console.log(`Found ${muleFiles.length} Mule-related files:`, muleFiles);
+      
       res.json({ files });
     } else {
+      console.log('No files found in repository');
       res.json({ files: [] });
     }
   } catch (err) {
+    console.error('Error listing files:', err.response?.data || err.message);
     res.status(err.response?.status || 500).json({ error: err.message });
   }
 });
 
-// Get file content
+// Enhanced get file content with better error handling
 app.post('/api/azure/fileContent', async (req, res) => {
   const { organization, project, repositoryId, filePath, token } = req.body;
   if (!organization || !project || !repositoryId || !filePath || !token) return res.status(400).json({ error: 'Missing params' });
   try {
+    console.log(`Fetching content for file: ${filePath}`);
     const response = await axios.get(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?path=${encodeURIComponent('/' + filePath)}&api-version=7.0`,
-      { headers: { 'Authorization': getAzureAuthHeader(token), 'Accept': 'text/plain' } }
+      { 
+        headers: { 
+          'Authorization': getAzureAuthHeader(token), 
+          'Accept': 'text/plain'
+        },
+        timeout: 30000 // 30 second timeout
+      }
     );
+    console.log(`Successfully fetched content for: ${filePath} (${response.data.length} characters)`);
     res.json({ content: response.data });
   } catch (err) {
+    console.error(`Error fetching file content for ${filePath}:`, err.response?.data || err.message);
     res.status(err.response?.status || 500).json({ error: err.message });
   }
 });
 
-// Create branch - Fixed API call format
+// Create branch - Enhanced with better error handling
 app.post('/api/azure/createBranch', async (req, res) => {
   const { organization, project, repositoryId, branchName, sourceBranch, token } = req.body;
   if (!organization || !project || !repositoryId || !branchName || !sourceBranch || !token) return res.status(400).json({ error: 'Missing params' });
   try {
+    console.log(`Creating branch ${branchName} from ${sourceBranch} in repository ${repositoryId}`);
+    
     // Get the source branch commit first
     const branchResponse = await axios.get(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/refs?filter=heads/${sourceBranch}&api-version=7.0`,
       { headers: { 'Authorization': getAzureAuthHeader(token), 'Accept': 'application/json' } }
     );
+    
     if (!branchResponse.data || !branchResponse.data.value || branchResponse.data.value.length === 0) {
+      console.error(`Source branch ${sourceBranch} not found`);
       return res.json({ success: false, error: 'Source branch not found' });
     }
+    
     const sourceCommitId = branchResponse.data.value[0].objectId;
+    console.log(`Source branch commit ID: ${sourceCommitId}`);
     
     // Create new branch with correct API format
     const createBranchPayload = [
@@ -115,10 +150,13 @@ app.post('/api/azure/createBranch', async (req, res) => {
         } 
       }
     );
+    
+    console.log(`Successfully created branch: ${branchName}`);
     res.json({ success: true });
   } catch (err) {
     if (err.response && err.response.status === 409) {
       // Branch already exists
+      console.log(`Branch ${branchName} already exists`);
       return res.json({ success: true });
     }
     console.error('Branch creation error:', err.response?.data || err.message);
@@ -126,20 +164,40 @@ app.post('/api/azure/createBranch', async (req, res) => {
   }
 });
 
-// Commit files - Improved error handling
+// Enhanced commit files with better validation and error handling
 app.post('/api/azure/commitFiles', async (req, res) => {
   const { organization, project, repositoryId, branchName, files, message, token } = req.body;
   if (!organization || !project || !repositoryId || !branchName || !files || !message || !token) return res.status(400).json({ error: 'Missing params' });
+  
+  if (!Array.isArray(files) || files.length === 0) {
+    return res.status(400).json({ error: 'Files array is empty or invalid' });
+  }
+  
   try {
+    console.log(`Committing ${files.length} files to branch ${branchName} in repository ${repositoryId}`);
+    console.log('Files to commit:', files.map(f => f.path));
+    
     // Get the latest commit on the branch
     const branchResponse = await axios.get(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/refs?filter=heads/${branchName}&api-version=7.0`,
       { headers: { 'Authorization': getAzureAuthHeader(token), 'Accept': 'application/json' } }
     );
+    
     if (!branchResponse.data || !branchResponse.data.value || branchResponse.data.value.length === 0) {
+      console.error(`Branch ${branchName} not found`);
       return res.json({ success: false, error: 'Branch not found' });
     }
+    
     const branchObjectId = branchResponse.data.value[0].objectId;
+    console.log(`Branch ${branchName} commit ID: ${branchObjectId}`);
+    
+    // Validate files have required properties
+    for (const file of files) {
+      if (!file.path || !file.content) {
+        console.error('Invalid file object:', file);
+        return res.status(400).json({ error: 'All files must have path and content properties' });
+      }
+    }
     
     const changes = files.map(file => ({
       changeType: 'edit',
@@ -152,7 +210,9 @@ app.post('/api/azure/commitFiles', async (req, res) => {
       commits: [{ comment: message, changes }]
     };
     
-    await axios.post(
+    console.log('Push payload prepared with', changes.length, 'changes');
+    
+    const pushResponse = await axios.post(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/pushes?api-version=7.0`,
       pushPayload,
       { 
@@ -160,13 +220,23 @@ app.post('/api/azure/commitFiles', async (req, res) => {
           'Authorization': getAzureAuthHeader(token), 
           'Content-Type': 'application/json',
           'Accept': 'application/json' 
-        } 
+        },
+        timeout: 60000 // 60 second timeout for large commits
       }
     );
+    
+    console.log(`Successfully committed ${files.length} files to branch ${branchName}`);
+    console.log('Push response:', pushResponse.data.pushedBy?.displayName || 'Unknown user');
     res.json({ success: true });
   } catch (err) {
     console.error('Commit files error:', err.response?.data || err.message);
-    res.status(err.response?.status || 500).json({ error: err.message });
+    if (err.response?.data?.message) {
+      console.error('Detailed error message:', err.response.data.message);
+    }
+    res.status(err.response?.status || 500).json({ 
+      error: err.response?.data?.message || err.message,
+      details: err.response?.data
+    });
   }
 });
 

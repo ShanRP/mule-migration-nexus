@@ -1,17 +1,18 @@
+
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { CheckCircle2, AlertTriangle, XCircle, ExternalLink } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, ExternalLink, Eye, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import axios from 'axios';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogClose } from '@/components/ui/dialog';
 import { useState } from 'react';
 import { getLatestMuleVersion, getLatestJavaVersion } from '@/utils/muleDetection';
 import { formatDistanceToNow } from 'date-fns';
 import { createAzureDevOpsAPI } from '@/utils/azureDevopsApi';
+import MigrationDetailsDialog from './MigrationDetailsDialog';
 
 interface MuleDependency {
   groupId: string;
@@ -49,17 +50,29 @@ interface MuleApplication {
   projectXmlPaths?: string[];
 }
 
+interface MigrationSelections {
+  muleRuntime: boolean;
+  javaVersion: boolean;
+  minMuleVersion: boolean;
+  dependencies: string[];
+  connectors: string[];
+}
+
 interface RepositoryListProps {
   applications: MuleApplication[];
   setApplications: React.Dispatch<React.SetStateAction<MuleApplication[]>>;
+  onMigrateAll: () => void;
 }
 
-const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplications }) => {
+const RepositoryList: React.FC<RepositoryListProps> = ({ 
+  applications, 
+  setApplications, 
+  onMigrateAll 
+}) => {
   const { selectedOrganization } = useOrganizations();
   const [migrating, setMigrating] = React.useState(false);
   const [selectedApp, setSelectedApp] = useState<MuleApplication | null>(null);
-  const [migrateDialogSelections, setMigrateDialogSelections] = useState<any>({});
-  const [migratingDialog, setMigratingDialog] = useState(false);
+  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
 
   const repositoryType = selectedOrganization?.repository_type;
   const githubToken = selectedOrganization?.github_token || '';
@@ -71,94 +84,33 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     ));
   };
 
-  // Helper to normalize file paths (remove leading slash)
-  const normalizePath = (path: string) => path.replace(/^\/+/, '');
-
-  // Enhanced function to discover file paths in repository
-  const discoverFilePaths = async (repoPath: string, branch: string): Promise<{
-    pomPaths: string[];
-    artifactJsonPaths: string[];
-    projectXmlPaths: string[];
-  }> => {
-    console.log(`Discovering file paths in ${repoPath} on branch ${branch}`);
-    
-    const pomPaths: string[] = [];
-    const artifactJsonPaths: string[] = [];
-    const projectXmlPaths: string[] = [];
-
-    try {
-      // Recursively search for files in the repository
-      const searchFiles = async (path: string = '') => {
-        try {
-          const contentsRes = await axios.get(
-            `https://api.github.com/repos/${repoPath}/contents/${path}?ref=${branch}`,
-            { headers: { Authorization: `token ${githubToken}` } }
-          );
-
-          if (Array.isArray(contentsRes.data)) {
-            for (const item of contentsRes.data) {
-              if (item.type === 'file') {
-                // Check for pom.xml files
-                if (item.name === 'pom.xml') {
-                  pomPaths.push(item.path);
-                  console.log(`Found pom.xml: ${item.path}`);
-                }
-                // Check for mule-artifact.json files
-                else if (item.name === 'mule-artifact.json') {
-                  artifactJsonPaths.push(item.path);
-                  console.log(`Found mule-artifact.json: ${item.path}`);
-                }
-                // Check for XML files in src/main/mule directory
-                else if (item.name.endsWith('.xml') && item.path.includes('src/main/mule/')) {
-                  projectXmlPaths.push(item.path);
-                  console.log(`Found project XML: ${item.path}`);
-                }
-              } else if (item.type === 'dir') {
-                // Recursively search directories
-                await searchFiles(item.path);
-              }
-            }
-          }
-        } catch (error) {
-          console.log(`Error searching in ${path}:`, error);
-        }
-      };
-
-      await searchFiles();
-    } catch (error) {
-      console.error('Error discovering file paths:', error);
-    }
-
-    console.log('Discovery results:', { pomPaths, artifactJsonPaths, projectXmlPaths });
-    return { pomPaths, artifactJsonPaths, projectXmlPaths };
+  const selectAll = () => {
+    setApplications(prev => prev.map(app => ({ ...app, selected: true })));
   };
 
-  // Enhanced function to update dependency versions in POM XML (ONLY app.runtime + remove CloudHub deps)
-  const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[]): string => {
+  const deselectAll = () => {
+    setApplications(prev => prev.map(app => ({ ...app, selected: false })));
+  };
+
+  // Enhanced function to update dependency versions in POM XML
+  const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[], selections: MigrationSelections): string => {
     let updatedPom = pomXml;
     
-    // ONLY update app.runtime version to 4.9.0
-    const latestMuleVersion = getLatestMuleVersion();
-    updatedPom = updatedPom.replace(
-      /<app\.runtime>.*?<\/app\.runtime>/g,
-      `<app.runtime>${latestMuleVersion}</app.runtime>`
-    );
+    // Update app.runtime version if selected
+    if (selections.muleRuntime) {
+      const latestMuleVersion = getLatestMuleVersion();
+      updatedPom = updatedPom.replace(
+        /<app\.runtime>.*?<\/app\.runtime>/g,
+        `<app.runtime>${latestMuleVersion}</app.runtime>`
+      );
+      console.log(`Updated app.runtime to ${latestMuleVersion}`);
+    }
     
-    // Remove ONLY CloudHub dependencies with more precise patterns
-    console.log('Removing CloudHub dependencies from POM...');
-    
-    // More precise CloudHub dependency removal patterns
+    // Remove CloudHub dependencies
     const cloudHubDepPatterns = [
-      // Specific CloudHub module dependency
       /<dependency>\s*<groupId>org\.mule\.modules<\/groupId>\s*<artifactId>mule-module-cloudhub<\/artifactId>[\s\S]*?<\/dependency>/g,
-      
-      // CloudHub connector dependencies
       /<dependency>\s*<groupId>org\.mule\.connectors<\/groupId>\s*<artifactId>mule-cloudhub-connector<\/artifactId>[\s\S]*?<\/dependency>/g,
-      
-      // Any dependency with cloudhub in artifactId
       /<dependency>[\s\S]*?<artifactId>[^<]*cloudhub[^<]*<\/artifactId>[\s\S]*?<\/dependency>/g,
-      
-      // CloudHub specific groupIds
       /<dependency>\s*<groupId>com\.mulesoft\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g,
       /<dependency>\s*<groupId>com\.mulesoft\.modules\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g
     ];
@@ -171,15 +123,11 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
       }
     });
     
-    // Clean up any double empty lines left by removed dependencies
-    updatedPom = updatedPom.replace(/\n\s*\n\s*\n/g, '\n\n');
-    
-    // Update each dependency to its latest version
+    // Update selected dependencies to their latest versions
     dependencies.forEach(dep => {
-      if (dep.latestVersion && dep.latestVersion !== dep.version) {
+      if (selections.dependencies.includes(dep.artifactId) && dep.latestVersion && dep.latestVersion !== dep.version) {
         console.log(`Updating ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
         
-        // Create a regex to find and update the specific dependency
         const dependencyRegex = new RegExp(
           `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
           'g'
@@ -188,6 +136,9 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
         updatedPom = updatedPom.replace(dependencyRegex, `$1${dep.latestVersion}$2`);
       }
     });
+    
+    // Clean up any double empty lines
+    updatedPom = updatedPom.replace(/\n\s*\n\s*\n/g, '\n\n');
     
     // Add migration comment
     if (!updatedPom.includes('<!-- Updated for CloudHub 2.0 migration -->')) {
@@ -198,9 +149,19 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
   };
 
   // Enhanced function to replace CloudHub connectors with Logger in XML files
-  const replaceCloudHubConnectors = (xmlContent: string): string => {
-    console.log('Replacing CloudHub connectors with Logger connectors...');
+  const replaceCloudHubConnectors = (xmlContent: string, selections: MigrationSelections): string => {
     let updatedXml = xmlContent;
+    
+    // Only process selected connectors
+    const selectedCloudHubConnectors = selections.connectors.filter(name => 
+      name.toLowerCase().includes('cloudhub')
+    );
+    
+    if (selectedCloudHubConnectors.length === 0) {
+      return xmlContent;
+    }
+    
+    console.log('Replacing selected CloudHub connectors with Logger connectors...');
     
     // Add Logger namespace if not present
     if (!updatedXml.includes('xmlns:logger=')) {
@@ -213,7 +174,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     
     // Replace CloudHub connectors with Logger
     const cloudHubPatterns = [
-      // CloudHub notification patterns
       {
         pattern: /<cloudhub:create-notification[^>]*>[\s\S]*?<\/cloudhub:create-notification>/g,
         replacement: '<logger:log level="INFO" message="CloudHub notification replaced with logger for CloudHub 2.0 migration" />'
@@ -222,7 +182,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
         pattern: /<cloudhub:create-notification[^>]*\/>/g,
         replacement: '<logger:log level="INFO" message="CloudHub notification replaced with logger for CloudHub 2.0 migration" />'
       },
-      // CloudHub list notifications
       {
         pattern: /<cloudhub:list-notifications[^>]*>[\s\S]*?<\/cloudhub:list-notifications>/g,
         replacement: '<logger:log level="INFO" message="CloudHub list notifications replaced with logger for CloudHub 2.0 migration" />'
@@ -231,7 +190,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
         pattern: /<cloudhub:list-notifications[^>]*\/>/g,
         replacement: '<logger:log level="INFO" message="CloudHub list notifications replaced with logger for CloudHub 2.0 migration" />'
       },
-      // CloudHub get application
       {
         pattern: /<cloudhub:get-application[^>]*>[\s\S]*?<\/cloudhub:get-application>/g,
         replacement: '<logger:log level="INFO" message="CloudHub get application replaced with logger for CloudHub 2.0 migration" />'
@@ -240,7 +198,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
         pattern: /<cloudhub:get-application[^>]*\/>/g,
         replacement: '<logger:log level="INFO" message="CloudHub get application replaced with logger for CloudHub 2.0 migration" />'
       },
-      // General CloudHub operations
       {
         pattern: /<cloudhub:[^>]*>[\s\S]*?<\/cloudhub:[^>]*>/g,
         replacement: '<logger:log level="INFO" message="CloudHub operation replaced with logger for CloudHub 2.0 migration" />'
@@ -268,54 +225,22 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     return updatedXml;
   };
 
-  const migrateGitHubApplication = async (app: MuleApplication) => {
-    console.log('Starting migration for app:', app.applicationName);
-    console.log('App file paths:', {
-      pomPaths: app.pomPaths,
-      artifactJsonPaths: app.artifactJsonPaths,
-      projectXmlPaths: app.projectXmlPaths
-    });
-
+  // Enhanced GitHub migration function
+  const migrateGitHubApplication = async (app: MuleApplication, selections: MigrationSelections) => {
+    console.log('Starting GitHub migration for app:', app.applicationName);
+    
     const repoPath = app.repository.replace('https://github.com/', '');
     const newBranch = 'mulemigration';
     
-    // If file paths are not available, discover them first
-    let pomPaths = app.pomPaths;
-    let artifactJsonPaths = app.artifactJsonPaths;
-    let projectXmlPaths = app.projectXmlPaths;
-
-    if (!pomPaths || pomPaths.length === 0 || !artifactJsonPaths || !projectXmlPaths) {
-      console.log('File paths not available, discovering them...');
-      const discoveredPaths = await discoverFilePaths(repoPath, app.branch);
-      pomPaths = discoveredPaths.pomPaths;
-      artifactJsonPaths = discoveredPaths.artifactJsonPaths;
-      projectXmlPaths = discoveredPaths.projectXmlPaths;
-      
-      // Update the application with discovered paths
-      setApplications(prev => prev.map(a => 
-        a.id === app.id 
-          ? { 
-              ...a, 
-              pomPaths: discoveredPaths.pomPaths,
-              artifactJsonPaths: discoveredPaths.artifactJsonPaths,
-              projectXmlPaths: discoveredPaths.projectXmlPaths
-            }
-          : a
-      ));
-    }
-    
-    // 1. Get base branch SHA
-    console.log(`Getting SHA for branch: ${app.branch}`);
+    // Get base branch SHA
     const branchRes = await axios.get(
       `https://api.github.com/repos/${repoPath}/git/refs/heads/${app.branch}`,
       { headers: { Authorization: `token ${githubToken}` } }
     );
     const baseSha = branchRes.data.object.sha;
-    console.log('Base SHA:', baseSha);
     
-    // 2. Create branch (ignore if exists)
+    // Create branch
     try {
-      console.log(`Creating new branch: ${newBranch}`);
       await axios.post(
         `https://api.github.com/repos/${repoPath}/git/refs`,
         {
@@ -324,220 +249,184 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
         },
         { headers: { Authorization: `token ${githubToken}` } }
       );
-      console.log('Branch created successfully');
     } catch (e) {
       console.log('Branch may already exist, continuing...');
     }
     
-    // 3. Update all pom.xml files with dependency version updates and CloudHub removal
-    if (pomPaths && pomPaths.length > 0) {
-      console.log('Processing POM files:', pomPaths);
-      
-      for (const pomPath of pomPaths) {
-        const normPomPath = normalizePath(pomPath);
-        console.log('Attempting to fetch/update pom.xml:', normPomPath, 'on branch', app.branch);
-        
+    // Update POM files if muleRuntime or dependencies are selected
+    if ((selections.muleRuntime || selections.dependencies.length > 0) && app.pomPaths) {
+      for (const pomPath of app.pomPaths) {
         try {
           const pomRes = await axios.get(
-            `https://api.github.com/repos/${repoPath}/contents/${normPomPath}?ref=${app.branch}`,
+            `https://api.github.com/repos/${repoPath}/contents/${pomPath}?ref=${app.branch}`,
             { headers: { Authorization: `token ${githubToken}` } }
           );
           const pomSha = pomRes.data.sha;
           const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
           
-          // Update POM with proper dependency version updates and CloudHub removal
-          const updatedPom = updatePomDependencies(pomXml, app.dependencies);
+          const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections);
           
           await axios.put(
-            `https://api.github.com/repos/${repoPath}/contents/${normPomPath}`,
+            `https://api.github.com/repos/${repoPath}/contents/${pomPath}`,
             {
-              message: `Mule migration: update dependencies and remove CloudHub for CloudHub 2.0 - ${normPomPath}`,
+              message: `Mule migration: update selected dependencies for CloudHub 2.0 - ${pomPath}`,
               content: btoa(updatedPom),
               branch: newBranch,
               sha: pomSha
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          console.log('Successfully updated:', normPomPath);
+          console.log('Successfully updated:', pomPath);
         } catch (error) {
-          console.error(`Failed to update ${normPomPath}:`, error);
-          // Continue with other files even if one fails
+          console.error(`Failed to update ${pomPath}:`, error);
         }
       }
-    } else {
-      console.log('No pom.xml files found to update');
     }
     
-    // 4. Update all mule-artifact.json files (Java version + minMuleVersion sync)
-    if (artifactJsonPaths && artifactJsonPaths.length > 0) {
-      console.log('Processing artifact JSON files:', artifactJsonPaths);
-      
-      for (const ajPath of artifactJsonPaths) {
-        const normAjPath = normalizePath(ajPath);
-        console.log('Attempting to fetch/update mule-artifact.json:', normAjPath, 'on branch', app.branch);
-        
+    // Update artifact JSON files if javaVersion or minMuleVersion are selected
+    if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
+      for (const ajPath of app.artifactJsonPaths) {
         try {
           const ajRes = await axios.get(
-            `https://api.github.com/repos/${repoPath}/contents/${normAjPath}?ref=${app.branch}`,
+            `https://api.github.com/repos/${repoPath}/contents/${ajPath}?ref=${app.branch}`,
             { headers: { Authorization: `token ${githubToken}` } }
           );
           const ajSha = ajRes.data.sha;
           const ajJson = JSON.parse(atob(ajRes.data.content.replace(/\n/g, '')));
           
-          // Update Java version and sync minMuleVersion with app.runtime
-          const latestJavaVersion = getLatestJavaVersion();
-          const latestMuleVersion = getLatestMuleVersion();
-          const updatedAj = { 
-            ...ajJson, 
-            javaSpecificationVersions: [latestJavaVersion],
-            minMuleVersion: latestMuleVersion
-          };
+          const updatedAj = { ...ajJson };
+          
+          if (selections.javaVersion) {
+            updatedAj.javaSpecificationVersions = [getLatestJavaVersion()];
+          }
+          
+          if (selections.minMuleVersion) {
+            updatedAj.minMuleVersion = getLatestMuleVersion();
+          }
           
           await axios.put(
-            `https://api.github.com/repos/${repoPath}/contents/${normAjPath}`,
+            `https://api.github.com/repos/${repoPath}/contents/${ajPath}`,
             {
-              message: `Mule migration: update Java version and sync minMuleVersion for CloudHub 2.0 - ${normAjPath}`,
+              message: `Mule migration: update artifact configuration for CloudHub 2.0 - ${ajPath}`,
               content: btoa(JSON.stringify(updatedAj, null, 2)),
               branch: newBranch,
               sha: ajSha
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          console.log('Successfully updated:', normAjPath);
+          console.log('Successfully updated:', ajPath);
         } catch (error) {
-          console.error(`Failed to update ${normAjPath}:`, error);
-          // Continue with other files even if one fails
+          console.error(`Failed to update ${ajPath}:`, error);
         }
       }
-    } else {
-      console.log('No mule-artifact.json files found to update');
     }
     
-    // 5. Update all src/main/mule/*.xml files with CloudHub connector replacement
-    if (projectXmlPaths && projectXmlPaths.length > 0) {
-      console.log('Processing project XML files:', projectXmlPaths);
-      
-      for (const xmlPath of projectXmlPaths) {
-        const normXmlPath = normalizePath(xmlPath);
-        console.log('Attempting to fetch/update project xml:', normXmlPath, 'on branch', app.branch);
-        
+    // Update project XML files if connectors are selected
+    if (selections.connectors.length > 0 && app.projectXmlPaths) {
+      for (const xmlPath of app.projectXmlPaths) {
         try {
           const xmlRes = await axios.get(
-            `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}?ref=${app.branch}`,
+            `https://api.github.com/repos/${repoPath}/contents/${xmlPath}?ref=${app.branch}`,
             { headers: { Authorization: `token ${githubToken}` } }
           );
           const xmlSha = xmlRes.data.sha;
           const xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
           
-          // Replace CloudHub connectors with Logger
-          const updatedXml = replaceCloudHubConnectors(xmlContent) + '\n<!-- Updated for CloudHub 2.0 migration -->';
+          const updatedXml = replaceCloudHubConnectors(xmlContent, selections) + '\n<!-- Updated for CloudHub 2.0 migration -->';
           
           await axios.put(
-            `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}`,
+            `https://api.github.com/repos/${repoPath}/contents/${xmlPath}`,
             {
-              message: `Mule migration: replace CloudHub connectors with Logger for CloudHub 2.0 - ${normXmlPath}`,
+              message: `Mule migration: update selected connectors for CloudHub 2.0 - ${xmlPath}`,
               content: btoa(updatedXml),
               branch: newBranch,
               sha: xmlSha
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          console.log('Successfully updated:', normXmlPath);
+          console.log('Successfully updated:', xmlPath);
         } catch (error) {
-          console.error(`Failed to update ${normXmlPath}:`, error);
-          // Continue with other files even if one fails
+          console.error(`Failed to update ${xmlPath}:`, error);
         }
       }
-    } else {
-      console.log('No project XML files found to update');
     }
-    
-    console.log('Migration completed for app:', app.applicationName);
   };
 
-  // Enhanced Azure DevOps migration using new API and robust type checks
-  const migrateAzureApplication = async (app: MuleApplication) => {
+  // Enhanced Azure DevOps migration function
+  const migrateAzureApplication = async (app: MuleApplication, selections: MigrationSelections) => {
     try {
       console.log('Starting Azure DevOps migration for app:', app.applicationName);
-      // Extract organization, project, and repo id (GUID)
+      console.log('Migration selections:', selections);
+      
       const urlParts = app.repository.split('/');
       const organization = urlParts[3];
       const project = urlParts[4];
-      // Use app.id as repoId (should be GUID)
       const repoId = app.id;
       const azureApi = createAzureDevOpsAPI(organization, azureToken);
+      
       // Create migration branch
       console.log(`Creating migration branch for ${app.name}...`);
       const branchCreated = await azureApi.createBranch(project, repoId, 'mulemigration', app.branch);
       if (!branchCreated) {
         throw new Error('Failed to create migration branch. Please check your PAT permissions.');
       }
-      // Prepare files for commit
+      
       const filesToCommit = [];
-      // Update POM files
-      console.log(`Updating POM files for ${app.name}...`);
-      for (const pomPath of app.pomPaths || []) {
-        let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
-        if (pomXml) {
-          if (typeof pomXml !== 'string') pomXml = JSON.stringify(pomXml);
-          let updatedPom;
-          try {
-            updatedPom = updatePomDependencies(pomXml, app.dependencies);
-          } catch (e) {
-            console.error('updatePomDependencies error:', e);
-            continue;
+      
+      // Update POM files if selected
+      if ((selections.muleRuntime || selections.dependencies.length > 0) && app.pomPaths) {
+        console.log(`Updating selected POM files for ${app.name}...`);
+        for (const pomPath of app.pomPaths) {
+          let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
+          if (pomXml && typeof pomXml === 'string') {
+            const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections);
+            filesToCommit.push({ path: pomPath, content: updatedPom });
           }
-          if (typeof updatedPom !== 'string') updatedPom = String(updatedPom);
-          filesToCommit.push({ path: pomPath, content: updatedPom });
-        } else {
-          console.warn(`Could not fetch POM file: ${pomPath}`);
         }
       }
-      // Update artifact JSON files
-      console.log(`Updating artifact JSON files for ${app.name}...`);
-      for (const ajPath of app.artifactJsonPaths || []) {
-        let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
-        let ajJson;
-        if (ajContent) {
-          if (typeof ajContent === 'string') {
+      
+      // Update artifact JSON files if selected
+      if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
+        console.log(`Updating selected artifact JSON files for ${app.name}...`);
+        for (const ajPath of app.artifactJsonPaths) {
+          let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
+          let ajJson = {};
+          
+          if (ajContent && typeof ajContent === 'string') {
             try {
               ajJson = JSON.parse(ajContent);
             } catch (e) {
               console.warn('Invalid JSON in artifact JSON, creating new:', e);
               ajJson = {};
             }
-          } else {
-            ajJson = ajContent;
           }
-        } else {
-          // File does not exist, create new
-          console.warn(`artifact JSON file not found: ${ajPath}, creating new`);
-          ajJson = {};
-        }
-        // Always update Java version and any other required fields
-        ajJson.javaSpecificationVersions = [getLatestJavaVersion()];
-        // Add any other default fields if needed
-        filesToCommit.push({ path: ajPath, content: JSON.stringify(ajJson, null, 2) });
-      }
-      // Update project XML files
-      console.log(`Updating project XML files for ${app.name}...`);
-      for (const xmlPath of app.projectXmlPaths || []) {
-        let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
-        if (xmlContent) {
-          if (typeof xmlContent !== 'string') xmlContent = JSON.stringify(xmlContent);
-          let updatedXml;
-          try {
-            updatedXml = replaceCloudHubConnectors(xmlContent) + '\n<!-- Updated for CloudHub 2.0 migration -->';
-          } catch (e) {
-            console.error('replaceCloudHubConnectors error:', e);
-            continue;
+          
+          const updatedAj = { ...ajJson };
+          
+          if (selections.javaVersion) {
+            updatedAj.javaSpecificationVersions = [getLatestJavaVersion()];
           }
-          if (typeof updatedXml !== 'string') updatedXml = String(updatedXml);
-          filesToCommit.push({ path: xmlPath, content: updatedXml });
-        } else {
-          console.warn(`Could not fetch XML file: ${xmlPath}`);
+          
+          if (selections.minMuleVersion) {
+            updatedAj.minMuleVersion = getLatestMuleVersion();
+          }
+          
+          filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
         }
       }
+      
+      // Update project XML files if connectors are selected
+      if (selections.connectors.length > 0 && app.projectXmlPaths) {
+        console.log(`Updating selected project XML files for ${app.name}...`);
+        for (const xmlPath of app.projectXmlPaths) {
+          let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
+          if (xmlContent && typeof xmlContent === 'string') {
+            const updatedXml = replaceCloudHubConnectors(xmlContent, selections) + '\n<!-- Updated for CloudHub 2.0 migration -->';
+            filesToCommit.push({ path: xmlPath, content: updatedXml });
+          }
+        }
+      }
+      
       // Commit all changes
       if (filesToCommit.length > 0) {
         console.log(`Committing ${filesToCommit.length} files for ${app.name}...`);
@@ -546,13 +435,12 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           repoId,
           'mulemigration',
           filesToCommit,
-          'Mule migration: update dependencies and configuration for CloudHub 2.0'
+          'Mule migration: update selected components for CloudHub 2.0'
         );
         if (!committed) {
           throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
         }
-        console.log(`Successfully migrated ${app.name}`);
-        setApplications(prev => prev.map(a => a.id === app.id ? { ...a, status: 'completed', lastUpdated: new Date().toISOString() } : a));
+        console.log(`Successfully migrated selected components for ${app.name}`);
         return true;
       } else {
         console.warn(`No files to commit for ${app.name}`);
@@ -565,35 +453,47 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     }
   };
 
-  const handleMigrateSelected = async () => {
-    const selectedApps = applications.filter(app => app.selected);
-    if (selectedApps.length === 0) {
-      toast.error('Please select at least one application to migrate');
-      return;
-    }
-    
+  // Handle selective migration from dialog
+  const handleSelectiveMigration = async (app: MuleApplication, selections: MigrationSelections) => {
     setMigrating(true);
     try {
-      for (const app of selectedApps) {
-        console.log('Migrating app:', app.applicationName, 'with paths:', {
-          pomPaths: app.pomPaths,
-          artifactJsonPaths: app.artifactJsonPaths,
-          projectXmlPaths: app.projectXmlPaths
-        });
-        
-        if (repositoryType === 'github') {
-          await migrateGitHubApplication(app);
-        } else if (repositoryType === 'azure_devops') {
-          await migrateAzureApplication(app);
-        }
+      console.log('Starting selective migration for:', app.applicationName, 'with selections:', selections);
+      
+      if (repositoryType === 'github') {
+        await migrateGitHubApplication(app, selections);
+      } else if (repositoryType === 'azure_devops') {
+        await migrateAzureApplication(app, selections);
       }
-      toast.success('Migration branch created and files updated for selected apps!');
+      
+      // Update application status
+      setApplications(prev => prev.map(a => 
+        a.id === app.id 
+          ? { ...a, status: 'completed', lastUpdated: new Date().toISOString() }
+          : a
+      ));
+      
+      toast.success(`Migration completed for ${app.applicationName}!`);
     } catch (err) {
-      console.error('Migration error:', err);
-      toast.error('Migration failed. Please check your token and repo permissions.');
+      console.error('Selective migration error:', err);
+      setApplications(prev => prev.map(a => 
+        a.id === app.id 
+          ? { ...a, status: 'failed', lastUpdated: new Date().toISOString() }
+          : a
+      ));
+      toast.error(`Migration failed for ${app.applicationName}`);
     } finally {
       setMigrating(false);
     }
+  };
+
+  const openDetailsDialog = (app: MuleApplication) => {
+    setSelectedApp(app);
+    setDetailsDialogOpen(true);
+  };
+
+  const closeDetailsDialog = () => {
+    setSelectedApp(null);
+    setDetailsDialogOpen(false);
   };
 
   const getStatusColor = (status: MuleApplication['status']) => {
@@ -622,84 +522,111 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
     }
   };
 
-  const getTotalDeprecatedItems = (app: MuleApplication) => {
-    const deprecatedDeps = app.dependencies.filter(dep => dep.isDeprecated).length;
-    const deprecatedConnectors = app.connectors.filter(conn => conn.isDeprecated).length;
-    return deprecatedDeps + deprecatedConnectors;
+  const getTotalUpdateCount = (app: MuleApplication) => {
+    let count = 0;
+    
+    // Check for runtime updates
+    if (app.muleRuntime !== getLatestMuleVersion()) count++;
+    if (app.javaVersion !== getLatestJavaVersion()) count++;
+    
+    // Check for dependency updates
+    count += app.dependencies.filter(dep => dep.version !== dep.latestVersion).length;
+    
+    // Check for deprecated items
+    count += app.dependencies.filter(dep => dep.isDeprecated).length;
+    count += app.connectors.filter(conn => conn.isDeprecated).length;
+    
+    return count;
   };
 
-  // Helper to handle checkbox changes in dialog
-  const handleDialogCheckboxChange = (key: string, value: any) => {
-    setMigrateDialogSelections((prev: any) => ({ ...prev, [key]: value }));
-  };
-
-  // Helper to handle migration from dialog
-  const handleDialogMigrate = async () => {
-    if (!selectedApp) return;
-    setMigratingDialog(true);
-    try {
-      // Call migration logic with selected options
-      await migrateSelectedParts(selectedApp, migrateDialogSelections);
-      // Update status in applications state
-      setApplications(prev => prev.map(app =>
-        app.id === selectedApp.id ? { ...app, status: 'completed', lastUpdated: new Date().toISOString() } : app
-      ));
-      toast.success('Migration completed for selected parts!');
-      setSelectedApp(null);
-      setMigrateDialogSelections({});
-    } catch (err) {
-      toast.error('Migration failed.');
-    } finally {
-      setMigratingDialog(false);
+  const getUpdateSummary = (app: MuleApplication) => {
+    const updates = [];
+    
+    if (app.muleRuntime !== getLatestMuleVersion()) {
+      updates.push(`Mule Runtime: ${app.muleRuntime} → ${getLatestMuleVersion()}`);
     }
+    
+    if (app.javaVersion !== getLatestJavaVersion()) {
+      updates.push(`Java: ${app.javaVersion} → ${getLatestJavaVersion()}`);
+    }
+    
+    const depUpdates = app.dependencies.filter(dep => dep.version !== dep.latestVersion).length;
+    if (depUpdates > 0) {
+      updates.push(`${depUpdates} dependency updates`);
+    }
+    
+    const deprecatedCount = app.dependencies.filter(dep => dep.isDeprecated).length + 
+                           app.connectors.filter(conn => conn.isDeprecated).length;
+    if (deprecatedCount > 0) {
+      updates.push(`${deprecatedCount} deprecated items`);
+    }
+    
+    return updates.join(', ');
   };
 
-  // Dummy migration function for dialog (to be implemented in Migration.tsx)
-  const migrateSelectedParts = async (app: MuleApplication, selections: any) => {
-    // This should call a prop or context migration function, or you can lift this up to Migration.tsx
-    // For now, just simulate delay
-    return new Promise(resolve => setTimeout(resolve, 1000));
-  };
+  const selectedCount = applications.filter(app => app.selected).length;
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Mule Applications ({applications.length} found)</CardTitle>
+          <CardTitle className="flex items-center justify-between">
+            <span>Mule Applications ({applications.length} found)</span>
+            <div className="flex items-center space-x-2">
+              <Button variant="outline" size="sm" onClick={selectAll}>
+                Select All
+              </Button>
+              <Button variant="outline" size="sm" onClick={deselectAll}>
+                Deselect All
+              </Button>
+              <Button 
+                onClick={onMigrateAll}
+                disabled={selectedCount === 0 || migrating}
+                size="lg"
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                {migrating ? 'Migrating...' : `Migrate All Selected (${selectedCount})`}
+              </Button>
+            </div>
+          </CardTitle>
           <CardDescription>
-            Comprehensive analysis including dependencies, connectors, and CloudHub 2.0 compatibility
+            Select applications and view details to customize your CloudHub 2.0 migration
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
-            <Table className="min-w-[1400px] border border-gray-300 border-collapse">
+            <Table className="min-w-[1600px] border border-gray-300 border-collapse">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-[50px] border border-gray-300">Select</TableHead>
-                  <TableHead className="border border-gray-300">Application Name</TableHead>
+                  <TableHead className="border border-gray-300">Application</TableHead>
                   <TableHead className="border border-gray-300">Repository</TableHead>
-                  <TableHead className="border border-gray-300">Mule Runtime</TableHead>
-                  <TableHead className="border border-gray-300">Java Version</TableHead>
+                  <TableHead className="border border-gray-300">Current Versions</TableHead>
+                  <TableHead className="border border-gray-300">Available Updates</TableHead>
                   <TableHead className="border border-gray-300">Dependencies</TableHead>
                   <TableHead className="border border-gray-300">Connectors</TableHead>
-                  <TableHead className="border border-gray-300">CloudHub 2.0 Compatibility</TableHead>
-                  <TableHead className="border border-gray-300">Latest Version</TableHead>
-                  <TableHead className="border border-gray-300">Last Updated</TableHead>
                   <TableHead className="border border-gray-300">Migration Status</TableHead>
                   <TableHead className="border border-gray-300">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {applications.map((app) => (
-                  <TableRow key={app.id}>
+                  <TableRow key={app.id} className={app.selected ? 'bg-blue-50' : ''}>
                     <TableCell className="border border-gray-300">
                       <input
                         type="checkbox"
                         checked={!!app.selected}
                         onChange={() => toggleApplicationSelection(app.id)}
+                        className="w-4 h-4"
                       />
                     </TableCell>
-                    <TableCell className="border border-gray-300">{app.applicationName}</TableCell>
+                    <TableCell className="border border-gray-300">
+                      <div>
+                        <div className="font-medium">{app.applicationName}</div>
+                        <div className="text-sm text-gray-500">Branch: {app.branch}</div>
+                      </div>
+                    </TableCell>
                     <TableCell className="border border-gray-300">
                       <a 
                         href={app.repository} 
@@ -714,69 +641,59 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
                       </a>
                     </TableCell>
                     <TableCell className="border border-gray-300">
-                      {app.muleRuntime}
-                      <div className="text-xs text-gray-500">Latest: {getLatestMuleVersion()}</div>
+                      <div className="space-y-1 text-sm">
+                        <div>Mule: {app.muleRuntime}</div>
+                        <div>Java: {app.javaVersion || 'Unknown'}</div>
+                      </div>
                     </TableCell>
                     <TableCell className="border border-gray-300">
-                      {app.javaVersion}
-                      <div className="text-xs text-gray-500">Latest: {getLatestJavaVersion()}</div>
-                    </TableCell>
-                    <TableCell className="border border-gray-300">
-                      <div className="space-y-1">
-                        {app.dependencies.map(dep => (
-                          <div key={dep.artifactId} className="flex items-center space-x-2">
-                            <span>{dep.artifactId}</span>
-                            <Badge variant="outline" className="text-xs">{dep.version}</Badge>
-                            {dep.version !== dep.latestVersion && (
-                              <Badge variant="outline" className="text-yellow-600 text-xs">→ {dep.latestVersion}</Badge>
-                            )}
-                            {dep.isDeprecated && (
-                              <Badge variant="destructive" className="text-xs">Deprecated</Badge>
-                            )}
-                            {dep.replacement && (
-                              <Badge variant="secondary" className="text-xs">Replace: {dep.replacement}</Badge>
-                            )}
+                      <div className="space-y-1 text-sm">
+                        {app.muleRuntime !== getLatestMuleVersion() && (
+                          <Badge variant="outline" className="text-yellow-600 text-xs">
+                            Mule → {getLatestMuleVersion()}
+                          </Badge>
+                        )}
+                        {app.javaVersion !== getLatestJavaVersion() && (
+                          <Badge variant="outline" className="text-yellow-600 text-xs">
+                            Java → {getLatestJavaVersion()}
+                          </Badge>
+                        )}
+                        {getTotalUpdateCount(app) > 0 && (
+                          <div className="text-xs text-blue-600 font-medium">
+                            {getTotalUpdateCount(app)} updates available
                           </div>
-                        ))}
+                        )}
                       </div>
                     </TableCell>
                     <TableCell className="border border-gray-300">
                       <div className="space-y-1">
-                        {app.connectors.map(conn => (
-                          <div key={conn.name} className="flex items-center space-x-2">
-                            <span>{conn.name}</span>
-                            {conn.isDeprecated && (
-                              <Badge variant="destructive" className="text-xs">Deprecated</Badge>
-                            )}
-                            {conn.cloudHub2Alternative && (
-                              <Badge variant="outline" className="text-blue-600 text-xs">{conn.cloudHub2Alternative}</Badge>
-                            )}
-                          </div>
-                        ))}
+                        <div className="text-sm font-medium">{app.dependencies.length} total</div>
+                        {app.dependencies.filter(dep => dep.version !== dep.latestVersion).length > 0 && (
+                          <Badge variant="outline" className="text-yellow-600 text-xs">
+                            {app.dependencies.filter(dep => dep.version !== dep.latestVersion).length} updates
+                          </Badge>
+                        )}
+                        {app.dependencies.filter(dep => dep.isDeprecated).length > 0 && (
+                          <Badge variant="destructive" className="text-xs">
+                            {app.dependencies.filter(dep => dep.isDeprecated).length} deprecated
+                          </Badge>
+                        )}
                       </div>
-                    </TableCell>
-                    <TableCell className="border border-gray-300">
-                      {app.connectors.filter(conn => conn.cloudHub2Alternative).length > 0 ? (
-                        <span className="text-red-600 text-xs">Some connectors not available in CloudHub 2.0</span>
-                      ) : (
-                        <span className="text-green-600 text-xs">All compatible</span>
-                      )}
                     </TableCell>
                     <TableCell className="border border-gray-300">
                       <div className="space-y-1">
-                        <div className="text-xs">Mule: {getLatestMuleVersion()}</div>
-                        <div className="text-xs">Java: {getLatestJavaVersion()}</div>
-                        {app.dependencies.map(dep => (
-                          <div key={dep.artifactId} className="text-xs">
-                            {dep.artifactId}: {dep.latestVersion}
-                          </div>
-                        ))}
+                        <div className="text-sm font-medium">{app.connectors.length} total</div>
+                        {app.connectors.filter(conn => conn.isDeprecated).length > 0 && (
+                          <Badge variant="destructive" className="text-xs">
+                            {app.connectors.filter(conn => conn.isDeprecated).length} deprecated
+                          </Badge>
+                        )}
+                        {app.connectors.filter(conn => conn.cloudHub2Alternative).length > 0 && (
+                          <Badge variant="outline" className="text-blue-600 text-xs">
+                            {app.connectors.filter(conn => conn.cloudHub2Alternative).length} need replacement
+                          </Badge>
+                        )}
                       </div>
-                    </TableCell>
-                    <TableCell className="border border-gray-300">
-                      <span className="text-xs text-gray-600">
-                        {app.lastUpdated ? formatDistanceToNow(new Date(app.lastUpdated), { addSuffix: true }) : 'N/A'}
-                      </span>
                     </TableCell>
                     <TableCell className="border border-gray-300">
                       <div className="flex items-center space-x-2">
@@ -785,25 +702,23 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
                           <span className={getStatusColor(app.status)}>
                             {app.status.replace('_', ' ')}
                           </span>
-                          {getTotalDeprecatedItems(app) > 0 && (
-                            <span className="text-xs text-red-600">
-                              {getTotalDeprecatedItems(app)} items need attention
+                          {app.lastUpdated && (
+                            <span className="text-xs text-gray-500">
+                              {formatDistanceToNow(new Date(app.lastUpdated), { addSuffix: true })}
                             </span>
                           )}
                         </div>
                       </div>
                     </TableCell>
                     <TableCell className="border border-gray-300">
-                      <Button variant="outline" size="sm" onClick={() => {
-                        setSelectedApp(app);
-                        setMigrateDialogSelections({
-                          muleRuntime: true,
-                          javaVersion: true,
-                          dependencies: app.dependencies.map(dep => dep.artifactId),
-                          connectors: app.connectors.map(conn => conn.name)
-                        });
-                      }}>
-                        View Details
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => openDetailsDialog(app)}
+                        className="flex items-center space-x-1"
+                      >
+                        <Eye className="h-3 w-3" />
+                        <span>View Details</span>
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -813,91 +728,15 @@ const RepositoryList: React.FC<RepositoryListProps> = ({ applications, setApplic
           </div>
         </CardContent>
       </Card>
-      
-      <div className="flex justify-end">
-        <Button
-          onClick={handleMigrateSelected}
-          disabled={!applications.some(app => app.selected) || migrating}
-          size="lg"
-        >
-          {migrating ? 'Migrating...' : 'Migrate Selected Applications'}
-        </Button>
-      </div>
 
-      {/* Dialog for View Details with selective migration */}
-      <Dialog open={!!selectedApp} onOpenChange={open => !open && setSelectedApp(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{selectedApp?.applicationName || selectedApp?.name}</DialogTitle>
-            <DialogDescription>Mule Application Details & Selective Migration</DialogDescription>
-          </DialogHeader>
-          {selectedApp && (
-            <div className="space-y-2">
-              <div><b>Repository:</b> {selectedApp.repository}</div>
-              <div><b>Mule Runtime:</b> {selectedApp.muleRuntime} <input type="checkbox" checked={!!migrateDialogSelections.muleRuntime} onChange={e => handleDialogCheckboxChange('muleRuntime', e.target.checked)} /> Update</div>
-              <div><b>Mule Version:</b> {selectedApp.muleVersion}</div>
-              <div><b>Java Version:</b> {selectedApp.javaVersion} <input type="checkbox" checked={!!migrateDialogSelections.javaVersion} onChange={e => handleDialogCheckboxChange('javaVersion', e.target.checked)} /> Update</div>
-              <div><b>Dependencies:</b>
-                <ul className="ml-4 list-disc">
-                  {selectedApp.dependencies.map(dep => (
-                    <li key={dep.artifactId}>
-                      <input type="checkbox" checked={migrateDialogSelections.dependencies?.includes(dep.artifactId)} onChange={e => {
-                        const checked = e.target.checked;
-                        setMigrateDialogSelections((prev: any) => ({
-                          ...prev,
-                          dependencies: checked
-                            ? [...(prev.dependencies || []), dep.artifactId]
-                            : (prev.dependencies || []).filter((id: string) => id !== dep.artifactId)
-                        }));
-                      }} />
-                      {dep.artifactId} ({dep.version})
-                      {dep.version !== dep.latestVersion && <> → <b>{dep.latestVersion}</b></>}
-                      {dep.isDeprecated && <span className="text-red-600 ml-1">Deprecated</span>}
-                      {dep.replacement && <span className="ml-1">(Replace with {dep.replacement})</span>}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div><b>Connectors:</b>
-                <ul className="ml-4 list-disc">
-                  {selectedApp.connectors.map(conn => (
-                    <li key={conn.name}>
-                      <input type="checkbox" checked={migrateDialogSelections.connectors?.includes(conn.name)} onChange={e => {
-                        const checked = e.target.checked;
-                        setMigrateDialogSelections((prev: any) => ({
-                          ...prev,
-                          connectors: checked
-                            ? [...(prev.connectors || []), conn.name]
-                            : (prev.connectors || []).filter((n: string) => n !== conn.name)
-                        }));
-                      }} />
-                      {conn.name} {conn.isDeprecated && <span className="text-red-600 ml-1">Deprecated</span>}
-                      {conn.cloudHub2Alternative && <span className="ml-1">(CloudHub 2.0: {conn.cloudHub2Alternative})</span>}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              {selectedApp.artifactJson && (
-                <div><b>Artifact JSON:</b>
-                  <ul className="ml-4 list-disc">
-                    {Object.entries(selectedApp.artifactJson).map(([key, value]) => (
-                      <li key={key}>{key}: {String(value)}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <div className="flex justify-end mt-4">
-                <Button onClick={handleDialogMigrate} disabled={migratingDialog}>
-                  {migratingDialog ? 'Migrating...' : 'Migrate Selected'}
-                </Button>
-              </div>
-            </div>
-          )}
-          <DialogClose asChild>
-            <Button>Close</Button>
-          </DialogClose>
-        </DialogContent>
-      </Dialog>
+      {/* Migration Details Dialog */}
+      <MigrationDetailsDialog
+        application={selectedApp}
+        isOpen={detailsDialogOpen}
+        onClose={closeDetailsDialog}
+        onMigrate={handleSelectiveMigration}
+        repositoryType={repositoryType || 'github'}
+      />
     </div>
   );
 };

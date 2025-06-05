@@ -87,7 +87,7 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
     muleVersion = muleVersionMatch[1];
   }
 
-  // Enhanced Java version extraction from artifactJson
+  // Enhanced Java version extraction with better handling
   let javaVersion = 'Unknown';
   if (artifactJson) {
     console.log('Processing artifact JSON for Java version:', artifactJson);
@@ -96,25 +96,29 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
       // Handle both parsed object and string versions
       let jsonObj = artifactJson;
       if (typeof artifactJson === 'string') {
-        jsonObj = JSON.parse(artifactJson);
+        try {
+          jsonObj = JSON.parse(artifactJson);
+        } catch (parseError) {
+          console.error('Failed to parse artifact JSON:', parseError);
+          jsonObj = {};
+        }
       }
       
       console.log('Parsed JSON object:', jsonObj);
       
-      // Check various possible keys for Java version
+      // Check various possible keys for Java version with priority order
       const javaKeys = [
-        'javaSpecificationVersions',
+        'javaSpecificationVersions', // Most common in Mule
         'javaSpecificationVersion', 
-        'javaversion',
+        'javaVersions',
         'javaVersion',
         'java',
-        'javaSpecification',
         'jvm',
         'jvmVersion'
       ];
       
       for (const key of javaKeys) {
-        if (jsonObj[key]) {
+        if (jsonObj[key] !== undefined && jsonObj[key] !== null) {
           console.log(`Found Java version under key '${key}':`, jsonObj[key]);
           
           if (Array.isArray(jsonObj[key]) && jsonObj[key].length > 0) {
@@ -133,7 +137,8 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
       if (javaVersion === 'Unknown') {
         console.log('Searching case-insensitively for Java version...');
         for (const [key, value] of Object.entries(jsonObj)) {
-          if (key.toLowerCase().includes('java')) {
+          const lowerKey = key.toLowerCase();
+          if (lowerKey.includes('java') && value !== undefined && value !== null && value !== '') {
             console.log(`Found potential Java key: ${key} with value:`, value);
             if (Array.isArray(value) && value.length > 0) {
               javaVersion = String(value[0]);
@@ -149,15 +154,36 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
       }
       
     } catch (error) {
-      console.error('Error parsing artifact JSON:', error);
+      console.error('Error processing artifact JSON for Java version:', error);
     }
   } else {
     console.log('No artifact JSON provided for Java version extraction');
   }
   
+  // Fallback: try to extract Java version from POM
+  if (javaVersion === 'Unknown') {
+    console.log('Attempting to extract Java version from POM...');
+    const javaVersionPatterns = [
+      /<maven\.compiler\.source>(.*?)<\/maven\.compiler\.source>/,
+      /<maven\.compiler\.target>(.*?)<\/maven\.compiler\.target>/,
+      /<java\.version>(.*?)<\/java\.version>/,
+      /<source>(.*?)<\/source>/,
+      /<target>(.*?)<\/target>/
+    ];
+    
+    for (const pattern of javaVersionPatterns) {
+      const match = pomXml.match(pattern);
+      if (match && match[1]) {
+        javaVersion = match[1];
+        console.log(`Extracted Java version from POM: ${javaVersion}`);
+        break;
+      }
+    }
+  }
+  
   console.log(`Final extracted Java version: ${javaVersion}`);
 
-  // Dependencies (as before)
+  // Dependencies extraction with better error handling
   const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
   const dependencies = depMatches
     .map(match => {
@@ -168,10 +194,12 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
       return { groupId, artifactId, version };
     })
     .filter(dep => 
-      dep.groupId.includes('mule') || 
-      dep.artifactId.includes('mule') ||
-      dep.groupId.includes('org.mule') ||
-      dep.groupId.includes('com.mulesoft')
+      dep.groupId && dep.artifactId && (
+        dep.groupId.includes('mule') || 
+        dep.artifactId.includes('mule') ||
+        dep.groupId.includes('org.mule') ||
+        dep.groupId.includes('com.mulesoft')
+      )
     )
     .map(dep => {
       const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
@@ -187,7 +215,7 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
       };
     });
 
-  console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies });
+  console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies: dependencies.length });
   return { applicationName, muleRuntime, muleVersion, javaVersion, dependencies };
 };
 
@@ -196,17 +224,33 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
   
   console.log('Analyzing Mule configuration for connectors...');
   
-  // Extract connectors from namespaces and flows
+  // Extract connectors from namespaces with better name extraction
   const namespaceMatches = [...muleConfigXml.matchAll(/xmlns:(\w+)="([^"]+)"/g)];
   namespaceMatches.forEach(match => {
     const prefix = match[1];
     const namespace = match[2];
+    
+    // Skip common non-connector namespaces
+    const skipNamespaces = ['xsi', 'mule', 'doc', 'spring', 'core'];
+    if (skipNamespaces.includes(prefix)) {
+      return;
+    }
+    
     let isDeprecated = isDeprecatedConnector(namespace);
     let cloudHub2Alternative = getCloudHub2Alternative(namespace);
     
-    if (namespace.includes('mule') || namespace.includes('connector')) {
+    // Extract a cleaner connector name from namespace
+    let connectorName = prefix;
+    if (namespace.includes('/mule/')) {
+      const parts = namespace.split('/mule/');
+      if (parts.length > 1) {
+        connectorName = parts[1].replace(/\/$/, '') || prefix;
+      }
+    }
+    
+    if (namespace.includes('mule') || namespace.includes('connector') || namespace.includes('module')) {
       connectors.push({
-        name: prefix,
+        name: connectorName,
         namespace,
         isDeprecated,
         cloudHub2Alternative
@@ -214,17 +258,49 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
     }
   });
   
-  // Look for VM connector with persistence
-  if (/persistent\s*=\s*['"]?true['"]?/i.test(muleConfigXml) && /<vm:/i.test(muleConfigXml)) {
-    connectors.push({
-      name: 'Persistent VM Queue',
-      namespace: 'vm',
-      isDeprecated: true,
-      cloudHub2Alternative: 'Replace with Logger connector (CloudHub 2.0)'
-    });
-  }
+  // Look for specific connector usage patterns in flows with better detection
+  const connectorUsagePatterns = [
+    // VM connector
+    { pattern: /<vm:/g, name: 'VM', deprecated: true, alternative: 'VM Connector 2.0 (CloudHub 2.0)' },
+    // JMS connector
+    { pattern: /<jms:/g, name: 'JMS', deprecated: true, alternative: 'JMS Connector 1.8+ (CloudHub 2.0)' },
+    // File connector
+    { pattern: /<file:/g, name: 'File', deprecated: true, alternative: 'File Connector 1.5+ (CloudHub 2.0)' },
+    // FTP connector
+    { pattern: /<ftp:/g, name: 'FTP', deprecated: true, alternative: 'FTP Connector 1.8+ (CloudHub 2.0)' },
+    // SFTP connector
+    { pattern: /<sftp:/g, name: 'SFTP', deprecated: true, alternative: 'SFTP Connector 2.4+ (CloudHub 2.0)' },
+    // Email connector
+    { pattern: /<email:/g, name: 'Email', deprecated: true, alternative: 'Email Connector 1.4+ (CloudHub 2.0)' },
+    // Database connector
+    { pattern: /<db:/g, name: 'Database', deprecated: false, alternative: undefined },
+    // HTTP connector
+    { pattern: /<http:/g, name: 'HTTP', deprecated: false, alternative: undefined },
+    // TCP connector
+    { pattern: /<tcp:/g, name: 'TCP', deprecated: true, alternative: 'Sockets Connector (CloudHub 2.0)' },
+    // UDP connector
+    { pattern: /<udp:/g, name: 'UDP', deprecated: true, alternative: 'Sockets Connector (CloudHub 2.0)' }
+  ];
+
+  connectorUsagePatterns.forEach(({ pattern, name, deprecated, alternative }) => {
+    if (pattern.test(muleConfigXml)) {
+      const existingConnector = connectors.find(c => 
+        c.name.toLowerCase().includes(name.toLowerCase()) || 
+        c.namespace.includes(name.toLowerCase())
+      );
+      
+      if (!existingConnector) {
+        connectors.push({
+          name: name,
+          namespace: `mule-${name.toLowerCase()}`,
+          isDeprecated: deprecated,
+          cloudHub2Alternative: alternative
+        });
+      }
+    }
+  });
   
-  // Enhanced CloudHub connector detection - ONLY if CloudHub connector is present
+  // Enhanced CloudHub connector detection
   const cloudHubPatterns = [
     /<cloudhub:create-notification/g,
     /<cloudhub:list-notifications/g,
@@ -243,51 +319,21 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
   // Only add CloudHub connector replacement if CloudHub connector is actually present
   if (hasCloudHubConnector) {
     console.log('CloudHub connector detected in configuration - adding replacement recommendation');
-    const existingCloudHub = connectors.find(c => c.name === 'cloudhub' || c.namespace.includes('cloudhub'));
+    const existingCloudHub = connectors.find(c => 
+      c.name.toLowerCase().includes('cloudhub') || 
+      c.namespace.includes('cloudhub')
+    );
     if (!existingCloudHub) {
       connectors.push({
-        name: 'CloudHub Connector',
+        name: 'CloudHub',
         namespace: 'cloudhub',
         isDeprecated: true,
         cloudHub2Alternative: 'Logger Connector (CloudHub 2.0 replacement)'
       });
     }
-  } else {
-    console.log('No CloudHub connector found in configuration - skipping replacement recommendation');
   }
   
-  // Also look for specific connector usage in flows
-  const flowMatches = [...muleConfigXml.matchAll(/<flow[\s\S]*?<\/flow>/g)];
-  flowMatches.forEach(flowMatch => {
-    const flowXml = flowMatch[0];
-    const deprecatedPatterns = [
-      /<vm:/g,
-      /<jms:/g,
-      /<file:/g,
-      /<ftp:/g,
-      /<sftp:/g,
-      /<email:/g,
-      /<db:/g,
-      /<http:/g,
-      /<tcp:/g,
-      /<udp:/g
-    ];
-    deprecatedPatterns.forEach(pattern => {
-      if (pattern.test(flowXml)) {
-        const connectorName = pattern.source.replace(/<|>/g, '').replace(':', '');
-        if (!connectors.find(c => c.name === connectorName)) {
-          connectors.push({
-            name: connectorName,
-            namespace: `mule-${connectorName}`,
-            isDeprecated: true,
-            cloudHub2Alternative: getCloudHub2Alternative(`mule-${connectorName}`)
-          });
-        }
-      }
-    });
-  });
-  
-  console.log(`Found ${connectors.length} connectors in configuration`);
+  console.log(`Found ${connectors.length} connectors in configuration:`, connectors.map(c => c.name));
   return connectors;
 };
 
