@@ -88,14 +88,14 @@ const RepositoryList = ({ applications, setApplications }: RepositoryListProps) 
         }
         
         // Update application status
-        setApplications(prev => prev.map(a => 
+        setApplications(applications.map(a => 
           a.id === app.id ? { ...a, status: 'completed' as const } : a
         ));
         
         successCount++;
       } catch (error) {
         console.error(`Migration failed for ${app.applicationName}:`, error);
-        setApplications(prev => prev.map(a => 
+        setApplications(applications.map(a => 
           a.id === app.id ? { ...a, status: 'failed' as const } : a
         ));
         failureCount++;
