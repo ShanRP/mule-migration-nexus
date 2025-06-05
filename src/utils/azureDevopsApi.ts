@@ -1,5 +1,8 @@
+import axios from 'axios';
 
-// Azure DevOps API utility functions using CORS proxy
+const AZURE_PROXY_BASE = 'http://localhost:3031/api/azure';
+
+// Azure DevOps API utility functions using backend proxy
 interface AzureProject {
   id: string;
   name: string;
@@ -26,245 +29,78 @@ interface AzureFileItem {
 export class AzureDevOpsAPI {
   private organization: string;
   private token: string;
-  private baseUrl: string;
-  private proxyUrl: string;
 
   constructor(organization: string, token: string) {
     this.organization = organization;
     this.token = token;
-    this.baseUrl = `https://dev.azure.com/${organization}`;
-    // Use a reliable CORS proxy service
-    this.proxyUrl = 'https://api.allorigins.win/raw?url=';
-  }
-
-  private getAuthHeaders() {
-    return {
-      'Authorization': `Basic ${btoa(':' + this.token)}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    };
-  }
-
-  private async makeProxiedRequest(url: string): Promise<Response> {
-    console.log(`Making proxied request to: ${url}`);
-    
-    // Encode the full URL with headers for the proxy
-    const encodedUrl = encodeURIComponent(url);
-    const proxyRequestUrl = `${this.proxyUrl}${encodedUrl}`;
-    
-    try {
-      // First try with the proxy
-      const response = await fetch(proxyRequestUrl, {
-        method: 'GET',
-        headers: {
-          'X-Requested-With': 'XMLHttpRequest'
-        }
-      });
-      
-      if (response.ok) {
-        console.log('Proxy request successful');
-        return response;
-      }
-      
-      console.log('Proxy request failed, trying alternative proxy...');
-      
-      // Try alternative proxy
-      const altProxyUrl = 'https://cors-anywhere.herokuapp.com/';
-      const altResponse = await fetch(altProxyUrl + url, {
-        method: 'GET',
-        headers: this.getAuthHeaders()
-      });
-      
-      return altResponse;
-    } catch (error) {
-      console.log('Proxy request failed:', error);
-      throw error;
-    }
   }
 
   async getProjects(): Promise<AzureProject[]> {
     try {
-      console.log('Fetching Azure DevOps projects using CORS proxy...');
-      
-      // Create a custom request that includes authentication
-      const url = `${this.baseUrl}/_apis/projects?api-version=7.0`;
-      
-      try {
-        // Use a different approach - create a request with authentication in the URL
-        const authToken = btoa(':' + this.token);
-        const authenticatedUrl = `https://dev.azure.com/${this.organization}/_apis/projects?api-version=7.0`;
-        
-        // Try using a service that can handle authenticated requests
-        const corsProxyUrl = 'https://api.codetabs.com/v1/proxy?quest=';
-        const proxyUrl = corsProxyUrl + encodeURIComponent(authenticatedUrl);
-        
-        const response = await fetch(proxyUrl, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Basic ${authToken}`,
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          console.log(`Successfully fetched ${data.value?.length || 0} projects via proxy`);
-          return data.value || [];
-        } else {
-          console.log(`Proxy request failed with status: ${response.status}`);
-        }
-      } catch (proxyError) {
-        console.log('Proxy approach failed:', proxyError);
+      console.log('Fetching Azure DevOps projects via backend proxy...');
+      const response = await axios.post(`${AZURE_PROXY_BASE}/projects`, {
+        organization: this.organization,
+        token: this.token
+      });
+      if (response.data && response.data.value) {
+        console.log(`Successfully fetched ${response.data.value.length} projects`);
+        return response.data.value;
       }
-      
-      // Fallback: Return a default project based on the organization
-      console.log('Using fallback approach for project discovery');
-      return [{
-        id: this.organization,
-        name: this.organization,
-        description: 'Default project (CORS fallback)'
-      }];
+      console.log('No projects found in response');
+      return [];
     } catch (error) {
       console.error('Error fetching projects:', error);
-      // Return organization as default project
-      return [{
-        id: this.organization,
-        name: this.organization,
-        description: 'Default project (error fallback)'
-      }];
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 401 || error.response?.status === 403) {
+          throw new Error('Authentication failed. Please check your Azure DevOps PAT and permissions.');
+        }
+        if (error.response?.status === 404) {
+          throw new Error('Organization not found. Please check your Azure DevOps organization URL.');
+        }
+      }
+      throw new Error('Failed to fetch projects. Please try again later.');
     }
   }
 
   async getRepositories(projectName: string): Promise<AzureRepository[]> {
     try {
-      console.log(`Fetching repositories for project: ${projectName} using CORS proxy`);
-      
-      const url = `${this.baseUrl}/${projectName}/_apis/git/repositories?api-version=7.0`;
-      
-      try {
-        // Use the same proxy approach for repositories
-        const authToken = btoa(':' + this.token);
-        const corsProxyUrl = 'https://api.codetabs.com/v1/proxy?quest=';
-        const proxyUrl = corsProxyUrl + encodeURIComponent(url);
-        
-        const response = await fetch(proxyUrl, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Basic ${authToken}`,
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          console.log(`Found ${data.value?.length || 0} repositories in project ${projectName} via proxy`);
-          return data.value || [];
-        } else {
-          console.log(`Failed to fetch repositories via proxy: ${response.status}`);
-        }
-      } catch (proxyError) {
-        console.log('Repository proxy request failed:', proxyError);
+      console.log(`Fetching repositories for project: ${projectName} via backend proxy...`);
+      const response = await axios.post(`${AZURE_PROXY_BASE}/repositories`, {
+        organization: this.organization,
+        project: projectName,
+        token: this.token
+      });
+      if (response.data && response.data.value) {
+        console.log(`Found ${response.data.value.length} repositories in project ${projectName}`);
+        return response.data.value;
       }
-      
-      // If proxy fails, try a different approach - use Azure DevOps public API
-      try {
-        console.log('Trying Azure DevOps public API approach...');
-        const publicUrl = `https://vsrm.dev.azure.com/${this.organization}/${projectName}/_apis/git/repositories?api-version=7.0`;
-        const corsAnywhereUrl = 'https://cors-anywhere.herokuapp.com/';
-        
-        const response = await fetch(corsAnywhereUrl + publicUrl, {
-          method: 'GET',
-          headers: this.getAuthHeaders()
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          console.log(`Found ${data.value?.length || 0} repositories via public API`);
-          return data.value || [];
-        }
-      } catch (publicError) {
-        console.log('Public API approach failed:', publicError);
-      }
-      
       console.log(`No repositories found for project ${projectName}`);
       return [];
     } catch (error) {
       console.error(`Error fetching repositories for project ${projectName}:`, error);
-      return [];
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 401 || error.response?.status === 403) {
+          throw new Error('Authentication failed. Please check your Azure DevOps PAT and permissions.');
+        }
+        if (error.response?.status === 404) {
+          throw new Error(`Project ${projectName} not found. Please check the project name.`);
+        }
+      }
+      throw new Error(`Failed to fetch repositories for project ${projectName}. Please try again later.`);
     }
   }
 
-  async getFileContent(projectName: string, repositoryId: string, filePath: string): Promise<string | null> {
+  async listFiles(projectName: string, repositoryId: string): Promise<string[]> {
     try {
-      console.log(`Fetching file content: ${filePath} using CORS proxy`);
-      
-      const url = `${this.baseUrl}/${projectName}/_apis/git/repositories/${repositoryId}/items?path=${encodeURIComponent('/' + filePath)}&api-version=7.0`;
-      
-      try {
-        const authToken = btoa(':' + this.token);
-        const corsProxyUrl = 'https://api.codetabs.com/v1/proxy?quest=';
-        const proxyUrl = corsProxyUrl + encodeURIComponent(url);
-        
-        const response = await fetch(proxyUrl, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Basic ${authToken}`,
-            'Accept': 'text/plain'
-          }
-        });
-        
-        if (response.ok) {
-          const content = await response.text();
-          console.log(`Successfully fetched ${filePath} via proxy (${content.length} characters)`);
-          return content;
-        } else {
-          console.log(`Failed to fetch file ${filePath} via proxy: ${response.status}`);
-        }
-      } catch (proxyError) {
-        console.log(`Error fetching file ${filePath} via proxy:`, proxyError);
+      const response = await axios.post(`${AZURE_PROXY_BASE}/listFiles`, {
+        organization: this.organization,
+        project: projectName,
+        repositoryId,
+        token: this.token
+      });
+      if (response.data && Array.isArray(response.data.files)) {
+        return response.data.files;
       }
-      
-      return null;
-    } catch (error) {
-      console.log(`Error fetching file ${filePath}:`, error);
-      return null;
-    }
-  }
-
-  async listFiles(projectName: string, repositoryId: string, path: string = ''): Promise<string[]> {
-    try {
-      console.log(`Listing files in path: ${path || 'root'} using CORS proxy`);
-      
-      const url = `${this.baseUrl}/${projectName}/_apis/git/repositories/${repositoryId}/items?recursionLevel=Full&api-version=7.0${path ? `&scopePath=${encodeURIComponent(path)}` : ''}`;
-      
-      try {
-        const authToken = btoa(':' + this.token);
-        const corsProxyUrl = 'https://api.codetabs.com/v1/proxy?quest=';
-        const proxyUrl = corsProxyUrl + encodeURIComponent(url);
-        
-        const response = await fetch(proxyUrl, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Basic ${authToken}`,
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          const files = (data.value || [])
-            .filter((item: AzureFileItem) => !item.isFolder && item.path && !item.path.includes('/target/'))
-            .map((item: AzureFileItem) => item.path.substring(1)); // Remove leading slash
-          
-          console.log(`Found ${files.length} files in ${path || 'repository'} via proxy`);
-          return files;
-        } else {
-          console.log(`Failed to list files via proxy: ${response.status}`);
-        }
-      } catch (proxyError) {
-        console.log('Error listing files via proxy:', proxyError);
-      }
-      
       return [];
     } catch (error) {
       console.error('Error listing files:', error);
@@ -272,46 +108,36 @@ export class AzureDevOpsAPI {
     }
   }
 
+  async getFileContent(projectName: string, repositoryId: string, filePath: string): Promise<string | null> {
+    try {
+      const response = await axios.post(`${AZURE_PROXY_BASE}/fileContent`, {
+        organization: this.organization,
+        project: projectName,
+        repositoryId,
+        filePath,
+        token: this.token
+      });
+      if (response.data && typeof response.data.content === 'string') {
+        return response.data.content;
+      }
+      return null;
+    } catch (error) {
+      console.error('Error fetching file content:', error);
+      return null;
+    }
+  }
+
   async createBranch(projectName: string, repositoryId: string, branchName: string, sourceBranch: string): Promise<boolean> {
     try {
-      console.log(`Creating branch ${branchName} from ${sourceBranch} using CORS proxy`);
-      
-      // Get the source branch commit first
-      const branchUrl = `${this.baseUrl}/${projectName}/_apis/git/repositories/${repositoryId}/refs?filter=heads/${sourceBranch}&api-version=7.0`;
-      
-      try {
-        const authToken = btoa(':' + this.token);
-        const corsProxyUrl = 'https://api.codetabs.com/v1/proxy?quest=';
-        const proxyUrl = corsProxyUrl + encodeURIComponent(branchUrl);
-        
-        const branchResponse = await fetch(proxyUrl, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Basic ${authToken}`,
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        if (!branchResponse.ok) {
-          console.log('Failed to get source branch info via proxy');
-          return false;
-        }
-        
-        const branchData = await branchResponse.json();
-        const sourceCommitId = branchData.value[0]?.objectId;
-        
-        if (!sourceCommitId) {
-          console.log('Could not find source commit ID');
-          return false;
-        }
-        
-        // Create new branch (this would need a POST proxy which is more complex)
-        console.log('Branch creation via CORS proxy is not fully implemented');
-        return false;
-      } catch (error) {
-        console.error('Error creating branch via proxy:', error);
-        return false;
-      }
+      const response = await axios.post(`${AZURE_PROXY_BASE}/createBranch`, {
+        organization: this.organization,
+        project: projectName,
+        repositoryId,
+        branchName,
+        sourceBranch,
+        token: this.token
+      });
+      return response.data && response.data.success;
     } catch (error) {
       console.error('Error creating branch:', error);
       return false;
@@ -320,11 +146,16 @@ export class AzureDevOpsAPI {
 
   async commitFiles(projectName: string, repositoryId: string, branchName: string, files: Array<{path: string, content: string}>, message: string): Promise<boolean> {
     try {
-      console.log(`Committing ${files.length} files to branch ${branchName} using CORS proxy`);
-      
-      // File commits via CORS proxy would require POST operations which are more complex
-      console.log('File commits via CORS proxy is not fully implemented');
-      return false;
+      const response = await axios.post(`${AZURE_PROXY_BASE}/commitFiles`, {
+        organization: this.organization,
+        project: projectName,
+        repositoryId,
+        branchName,
+        files,
+        message,
+        token: this.token
+      });
+      return response.data && response.data.success;
     } catch (error) {
       console.error('Error committing files:', error);
       return false;

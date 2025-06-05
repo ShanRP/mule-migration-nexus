@@ -302,7 +302,7 @@ const Dashboard = () => {
 
   const scanAzureRepositories = async (token: string, organization: string) => {
     try {
-      console.log('Scanning Azure DevOps repositories using new API approach...');
+      console.log('Scanning Azure DevOps repositories...');
       
       const azureApi = createAzureDevOpsAPI(organization, token);
       
@@ -311,7 +311,7 @@ const Dashboard = () => {
       console.log(`Found ${projects.length} projects in organization ${organization}`);
       
       if (projects.length === 0) {
-        console.log('No projects found in Azure DevOps organization');
+        toast.error('No projects found in Azure DevOps organization. Please check your organization URL and PAT permissions.');
         return [];
       }
       
@@ -332,11 +332,17 @@ const Dashboard = () => {
             });
           }
         } catch (error) {
-          console.log(`Error fetching repos for project ${project.name}:`, error);
+          console.error(`Error fetching repos for project ${project.name}:`, error);
+          toast.error(`Failed to fetch repositories for project ${project.name}. Please check your PAT permissions.`);
         }
       }
       
       console.log(`Total Azure DevOps repositories to scan: ${allRepos.length}`);
+      
+      if (allRepos.length === 0) {
+        toast.error('No repositories found in any project. Please check your PAT permissions and repository access.');
+        return [];
+      }
       
       const muleAppsMap = new Map<string, MuleApplication>();
       
@@ -464,7 +470,8 @@ const Dashboard = () => {
             }
           }
         } catch (error) {
-          console.log(`Error processing Azure repo ${repo.name}:`, error);
+          console.error(`Error processing Azure repo ${repo.name}:`, error);
+          toast.error(`Failed to process repository ${repo.name}. Please check your PAT permissions and repository access.`);
         }
       }
       
@@ -474,7 +481,18 @@ const Dashboard = () => {
       
     } catch (error) {
       console.error('Azure DevOps scanning failed:', error);
-      throw new Error(`Azure DevOps scanning failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      if (error instanceof Error) {
+        if (error.message.includes('Authentication failed')) {
+          toast.error('Authentication failed. Please check your Azure DevOps PAT and permissions.');
+        } else if (error.message.includes('Organization not found')) {
+          toast.error('Organization not found. Please check your Azure DevOps organization URL.');
+        } else {
+          toast.error(`Azure DevOps scanning failed: ${error.message}`);
+        }
+      } else {
+        toast.error('Azure DevOps scanning failed. Please check your connection and try again.');
+      }
+      throw error;
     }
   };
 
