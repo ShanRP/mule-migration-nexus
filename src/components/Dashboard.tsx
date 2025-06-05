@@ -111,22 +111,57 @@ const Dashboard = () => {
     try {
       console.log(`Fetching ${filePath} from Azure DevOps repo ${organization}/${project}/${repoId}`);
       
-      // Use CORS proxy service
-      const proxyUrl = 'https://corsproxy.io/?';
+      // Try multiple CORS proxy services in order of preference
+      const proxyServices = [
+        'https://api.allorigins.win/raw?url=',
+        'https://cors-anywhere.herokuapp.com/',
+        'https://thingproxy.freeboard.io/fetch/'
+      ];
+      
       const targetUrl = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoId}/items?path=${encodeURIComponent('/' + filePath)}&api-version=6.0`;
-      const fullUrl = proxyUrl + encodeURIComponent(targetUrl);
       
-      const response = await axios.get(fullUrl, {
-        headers: {
-          'Authorization': `Basic ${btoa(':' + token)}`,
-          'Content-Type': 'application/json'
+      for (const proxyUrl of proxyServices) {
+        try {
+          console.log(`Trying proxy: ${proxyUrl}`);
+          const fullUrl = proxyUrl + encodeURIComponent(targetUrl);
+          
+          const response = await axios.get(fullUrl, {
+            headers: {
+              'Authorization': `Basic ${btoa(':' + token)}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 10000
+          });
+          
+          if (response.data) {
+            console.log(`Successfully fetched ${filePath} from Azure DevOps using ${proxyUrl}`);
+            return response.data;
+          }
+        } catch (proxyError) {
+          console.log(`Proxy ${proxyUrl} failed:`, proxyError);
+          continue;
         }
-      });
-      
-      if (response.data) {
-        console.log(`Successfully fetched ${filePath} from Azure DevOps`);
-        return response.data;
       }
+      
+      // If all proxies fail, try direct request (might work in some environments)
+      try {
+        console.log('Attempting direct request to Azure DevOps...');
+        const response = await axios.get(targetUrl, {
+          headers: {
+            'Authorization': `Basic ${btoa(':' + token)}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 5000
+        });
+        
+        if (response.data) {
+          console.log(`Successfully fetched ${filePath} via direct request`);
+          return response.data;
+        }
+      } catch (directError) {
+        console.log('Direct request failed:', directError);
+      }
+      
     } catch (error) {
       console.log(`Could not fetch ${filePath} from Azure DevOps repo:`, error);
     }
@@ -136,11 +171,23 @@ const Dashboard = () => {
   const listAllGitHubFiles = async (repoFullName: string, path: string, token: string): Promise<string[]> => {
     let files: string[] = [];
     try {
+      // Skip the target directory entirely
+      if (path.includes('/target/') || path === 'target' || path.startsWith('target/')) {
+        console.log(`Skipping target directory: ${path}`);
+        return files;
+      }
+      
       const res = await axios.get(
         `https://api.github.com/repos/${repoFullName}/contents/${path}`,
         { headers: { Authorization: `token ${token}` } }
       );
       for (const item of res.data) {
+        // Skip target directories at any level
+        if (item.name === 'target' || item.path.includes('/target/')) {
+          console.log(`Skipping target directory: ${item.path}`);
+          continue;
+        }
+        
         if (item.type === 'file') {
           files.push(item.path);
         } else if (item.type === 'dir') {
@@ -148,7 +195,9 @@ const Dashboard = () => {
           files = files.concat(subFiles);
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      console.log(`Error listing files in ${path}:`, e);
+    }
     return files;
   };
 
@@ -157,24 +206,64 @@ const Dashboard = () => {
     try {
       console.log(`Listing files in Azure DevOps repo: org=${organization}, project=${project}, repoId=${repoId}, path=${path}`);
       
-      // Use CORS proxy service
-      const proxyUrl = 'https://corsproxy.io/?';
+      // Try multiple CORS proxy services
+      const proxyServices = [
+        'https://api.allorigins.win/raw?url=',
+        'https://cors-anywhere.herokuapp.com/',
+        'https://thingproxy.freeboard.io/fetch/'
+      ];
+      
       const targetUrl = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoId}/items?path=${encodeURIComponent(path)}&recursionLevel=Full&api-version=6.0`;
-      const fullUrl = proxyUrl + encodeURIComponent(targetUrl);
       
-      const response = await axios.get(fullUrl, {
-        headers: {
-          'Authorization': `Basic ${btoa(':' + token)}`,
-          'Content-Type': 'application/json'
+      for (const proxyUrl of proxyServices) {
+        try {
+          console.log(`Trying proxy for file listing: ${proxyUrl}`);
+          const fullUrl = proxyUrl + encodeURIComponent(targetUrl);
+          
+          const response = await axios.get(fullUrl, {
+            headers: {
+              'Authorization': `Basic ${btoa(':' + token)}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 15000
+          });
+          
+          if (response.data && response.data.value) {
+            files = response.data.value
+              .filter((item: any) => !item.isFolder && item.path && !item.path.includes('/target/'))
+              .map((item: any) => item.path.substring(1)); // Remove leading slash
+            console.log(`Successfully listed ${files.length} files from Azure DevOps using ${proxyUrl}`);
+            break;
+          }
+        } catch (proxyError) {
+          console.log(`File listing proxy ${proxyUrl} failed:`, proxyError);
+          continue;
         }
-      });
-      
-      if (response.data && response.data.value) {
-        files = response.data.value
-          .filter((item: any) => !item.isFolder && item.path)
-          .map((item: any) => item.path.substring(1)); // Remove leading slash
-        console.log(`Successfully listed ${files.length} files from Azure DevOps`);
       }
+      
+      // If all proxies fail, try direct request
+      if (files.length === 0) {
+        try {
+          console.log('Attempting direct file listing request...');
+          const response = await axios.get(targetUrl, {
+            headers: {
+              'Authorization': `Basic ${btoa(':' + token)}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 10000
+          });
+          
+          if (response.data && response.data.value) {
+            files = response.data.value
+              .filter((item: any) => !item.isFolder && item.path && !item.path.includes('/target/'))
+              .map((item: any) => item.path.substring(1));
+            console.log(`Successfully listed ${files.length} files via direct request`);
+          }
+        } catch (directError) {
+          console.log('Direct file listing failed:', directError);
+        }
+      }
+      
     } catch (error) {
       console.log('Error listing Azure DevOps files:', error);
     }
@@ -343,26 +432,62 @@ const Dashboard = () => {
   const scanAzureRepositories = async (token: string, organization: string) => {
     let allRepos = [];
     try {
-      console.log('Scanning Azure DevOps repositories with CORS proxy...');
+      console.log('Scanning Azure DevOps repositories with improved CORS handling...');
       
-      // Use CORS proxy service
-      const proxyUrl = 'https://corsproxy.io/?';
+      // Try multiple CORS proxy services
+      const proxyServices = [
+        'https://api.allorigins.win/raw?url=',
+        'https://cors-anywhere.herokuapp.com/',
+        'https://thingproxy.freeboard.io/fetch/'
+      ];
+      
+      let projectsData = null;
       
       // First get all projects
       const projectsUrl = `https://dev.azure.com/${organization}/_apis/projects?api-version=6.0`;
-      const projectsFullUrl = proxyUrl + encodeURIComponent(projectsUrl);
       
-      const projectsResponse = await axios.get(projectsFullUrl, {
-        headers: {
-          'Authorization': `Basic ${btoa(':' + token)}`,
-          'Content-Type': 'application/json'
+      for (const proxyUrl of proxyServices) {
+        try {
+          console.log(`Trying proxy for projects: ${proxyUrl}`);
+          const projectsFullUrl = proxyUrl + encodeURIComponent(projectsUrl);
+          
+          const projectsResponse = await axios.get(projectsFullUrl, {
+            headers: {
+              'Authorization': `Basic ${btoa(':' + token)}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 15000
+          });
+          
+          projectsData = projectsResponse.data;
+          console.log(`Successfully fetched projects using ${proxyUrl}:`, projectsData.value?.length || 0);
+          break;
+        } catch (proxyError) {
+          console.log(`Projects proxy ${proxyUrl} failed:`, proxyError);
+          continue;
         }
-      });
+      }
       
-      const projectsData = projectsResponse.data;
-      console.log('Azure DevOps projects found:', projectsData.value?.length || 0);
+      // If all proxies fail, try direct request
+      if (!projectsData) {
+        try {
+          console.log('Attempting direct projects request...');
+          const projectsResponse = await axios.get(projectsUrl, {
+            headers: {
+              'Authorization': `Basic ${btoa(':' + token)}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 10000
+          });
+          projectsData = projectsResponse.data;
+          console.log('Successfully fetched projects via direct request:', projectsData.value?.length || 0);
+        } catch (directError) {
+          console.log('Direct projects request failed:', directError);
+          throw new Error('Unable to fetch Azure DevOps projects due to CORS restrictions');
+        }
+      }
       
-      if (!projectsData.value || projectsData.value.length === 0) {
+      if (!projectsData || !projectsData.value || projectsData.value.length === 0) {
         console.log('No projects found in Azure DevOps organization');
         return [];
       }
@@ -371,19 +496,50 @@ const Dashboard = () => {
       for (const project of projectsData.value) {
         try {
           const reposUrl = `https://dev.azure.com/${organization}/${project.name}/_apis/git/repositories?api-version=6.0`;
-          const reposFullUrl = proxyUrl + encodeURIComponent(reposUrl);
+          let reposData = null;
           
-          const reposResponse = await axios.get(reposFullUrl, {
-            headers: {
-              'Authorization': `Basic ${btoa(':' + token)}`,
-              'Content-Type': 'application/json'
+          for (const proxyUrl of proxyServices) {
+            try {
+              console.log(`Trying proxy for repos in project ${project.name}: ${proxyUrl}`);
+              const reposFullUrl = proxyUrl + encodeURIComponent(reposUrl);
+              
+              const reposResponse = await axios.get(reposFullUrl, {
+                headers: {
+                  'Authorization': `Basic ${btoa(':' + token)}`,
+                  'Content-Type': 'application/json'
+                },
+                timeout: 15000
+              });
+              
+              reposData = reposResponse.data;
+              console.log(`Successfully fetched repos for project ${project.name} using ${proxyUrl}:`, reposData.value?.length || 0);
+              break;
+            } catch (proxyError) {
+              console.log(`Repos proxy ${proxyUrl} failed for project ${project.name}:`, proxyError);
+              continue;
             }
-          });
+          }
           
-          const reposData = reposResponse.data;
-          console.log(`Found ${reposData.value?.length || 0} repositories in project ${project.name}`);
+          // If proxies fail, try direct request
+          if (!reposData) {
+            try {
+              console.log(`Attempting direct repos request for project ${project.name}...`);
+              const reposResponse = await axios.get(reposUrl, {
+                headers: {
+                  'Authorization': `Basic ${btoa(':' + token)}`,
+                  'Content-Type': 'application/json'
+                },
+                timeout: 10000
+              });
+              reposData = reposResponse.data;
+              console.log(`Successfully fetched repos for project ${project.name} via direct request`);
+            } catch (directError) {
+              console.log(`Direct repos request failed for project ${project.name}:`, directError);
+              continue;
+            }
+          }
           
-          if (reposData.value) {
+          if (reposData && reposData.value) {
             for (const repo of reposData.value) {
               allRepos.push({
                 ...repo,
@@ -578,7 +734,7 @@ const Dashboard = () => {
       if (err instanceof Error && err.message.includes('401')) {
         toast.error('Authentication failed. Please check your token and permissions.');
       } else if (err instanceof Error && err.message.includes('CORS')) {
-        toast.error('Network error encountered. Please try again.');
+        toast.error('CORS restrictions encountered. Please try using a CORS browser extension or contact your administrator.');
       } else {
         toast.error('Failed to fetch repositories. Please check your token and permissions.');
       }

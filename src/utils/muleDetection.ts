@@ -194,6 +194,8 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
 export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[] => {
   const connectors: MuleConnector[] = [];
   
+  console.log('Analyzing Mule configuration for connectors...');
+  
   // Extract connectors from namespaces and flows
   const namespaceMatches = [...muleConfigXml.matchAll(/xmlns:(\w+)="([^"]+)"/g)];
   namespaceMatches.forEach(match => {
@@ -201,12 +203,6 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
     const namespace = match[2];
     let isDeprecated = isDeprecatedConnector(namespace);
     let cloudHub2Alternative = getCloudHub2Alternative(namespace);
-    
-    // Special handling for CloudHub connectors
-    if (namespace.includes('cloudhub') || prefix.includes('cloudhub')) {
-      isDeprecated = true;
-      cloudHub2Alternative = 'Logger Connector (CloudHub 2.0 replacement)';
-    }
     
     if (namespace.includes('mule') || namespace.includes('connector')) {
       connectors.push({
@@ -228,27 +224,37 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
     });
   }
   
-  // Enhanced CloudHub connector detection
+  // Enhanced CloudHub connector detection - ONLY if CloudHub connector is present
   const cloudHubPatterns = [
     /<cloudhub:create-notification/g,
     /<cloudhub:list-notifications/g,
     /<cloudhub:get-application/g,
-    /<cloudhub:[^>]+>/g
+    /<cloudhub:[^>]+>/g,
+    /xmlns:cloudhub=/g
   ];
   
+  let hasCloudHubConnector = false;
   cloudHubPatterns.forEach(pattern => {
     if (pattern.test(muleConfigXml)) {
-      const existingCloudHub = connectors.find(c => c.name === 'cloudhub');
-      if (!existingCloudHub) {
-        connectors.push({
-          name: 'CloudHub Connector',
-          namespace: 'cloudhub',
-          isDeprecated: true,
-          cloudHub2Alternative: 'Logger Connector (CloudHub 2.0 replacement)'
-        });
-      }
+      hasCloudHubConnector = true;
     }
   });
+  
+  // Only add CloudHub connector replacement if CloudHub connector is actually present
+  if (hasCloudHubConnector) {
+    console.log('CloudHub connector detected in configuration - adding replacement recommendation');
+    const existingCloudHub = connectors.find(c => c.name === 'cloudhub' || c.namespace.includes('cloudhub'));
+    if (!existingCloudHub) {
+      connectors.push({
+        name: 'CloudHub Connector',
+        namespace: 'cloudhub',
+        isDeprecated: true,
+        cloudHub2Alternative: 'Logger Connector (CloudHub 2.0 replacement)'
+      });
+    }
+  } else {
+    console.log('No CloudHub connector found in configuration - skipping replacement recommendation');
+  }
   
   // Also look for specific connector usage in flows
   const flowMatches = [...muleConfigXml.matchAll(/<flow[\s\S]*?<\/flow>/g)];
@@ -281,6 +287,7 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
     });
   });
   
+  console.log(`Found ${connectors.length} connectors in configuration`);
   return connectors;
 };
 
@@ -381,7 +388,7 @@ const isDeprecatedConnector = (namespace: string): boolean => {
     'http://www.mulesoft.org/schema/mule/email',
     'http://www.mulesoft.org/schema/mule/tcp',
     'http://www.mulesoft.org/schema/mule/udp',
-    'http://www.mulesoft.org/schema/mule/cloudhub' // Added CloudHub namespace
+    'http://www.mulesoft.org/schema/mule/cloudhub' // CloudHub namespace
   ];
   
   return deprecatedNamespaces.includes(namespace) || namespace.includes('cloudhub');
