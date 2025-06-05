@@ -1,8 +1,10 @@
-
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 // Helper to build Azure DevOps auth header
 function getAzureAuthHeader(token) {
@@ -237,6 +239,123 @@ app.post('/api/azure/commitFiles', async (req, res) => {
       error: err.response?.data?.message || err.message,
       details: err.response?.data
     });
+  }
+});
+
+// New endpoint: Check Maven dependency versions using Maven Central API
+app.post('/api/maven/versions', async (req, res) => {
+  const { dependencies } = req.body;
+  
+  if (!dependencies || !Array.isArray(dependencies)) {
+    return res.status(400).json({ error: 'Dependencies array is required' });
+  }
+  
+  try {
+    console.log(`Checking versions for ${dependencies.length} dependencies...`);
+    
+    const versionChecks = dependencies.map(async (dep) => {
+      const { groupId, artifactId, currentVersion } = dep;
+      
+      try {
+        const response = await axios.get('https://search.maven.org/solrsearch/select', {
+          params: {
+            q: `g:"${groupId}" AND a:"${artifactId}"`,
+            rows: 1,
+            wt: 'json'
+          },
+          timeout: 10000
+        });
+        
+        if (response.data?.response?.docs?.length > 0) {
+          const latestVersion = response.data.response.docs[0].latestVersion;
+          return {
+            groupId,
+            artifactId,
+            currentVersion,
+            latestVersion,
+            hasUpdate: latestVersion !== currentVersion
+          };
+        } else {
+          return {
+            groupId,
+            artifactId,
+            currentVersion,
+            latestVersion: currentVersion,
+            hasUpdate: false
+          };
+        }
+      } catch (error) {
+        console.error(`Error checking version for ${groupId}:${artifactId}:`, error.message);
+        return {
+          groupId,
+          artifactId,
+          currentVersion,
+          latestVersion: currentVersion,
+          hasUpdate: false,
+          error: error.message
+        };
+      }
+    });
+    
+    const results = await Promise.all(versionChecks);
+    console.log(`Version check completed. Found updates for ${results.filter(r => r.hasUpdate).length} dependencies.`);
+    
+    res.json({ versions: results });
+  } catch (error) {
+    console.error('Error in Maven version check:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// New endpoint: Execute Maven commands (for future server-side Maven execution)
+app.post('/api/maven/execute', async (req, res) => {
+  const { pomContent, command = 'versions:display-dependency-updates' } = req.body;
+  
+  if (!pomContent) {
+    return res.status(400).json({ error: 'POM content is required' });
+  }
+  
+  try {
+    console.log('Executing Maven command:', command);
+    
+    // Create temporary directory
+    const tempDir = path.join(__dirname, 'temp', Date.now().toString());
+    fs.mkdirSync(tempDir, { recursive: true });
+    
+    // Write POM file
+    const pomPath = path.join(tempDir, 'pom.xml');
+    fs.writeFileSync(pomPath, pomContent);
+    
+    // Execute Maven command
+    const mvnCommand = `mvn ${command} -f "${pomPath}" -q`;
+    
+    exec(mvnCommand, { timeout: 30000 }, (error, stdout, stderr) => {
+      // Cleanup
+      try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        console.warn('Failed to cleanup temp directory:', cleanupError);
+      }
+      
+      if (error) {
+        console.error('Maven command failed:', error);
+        return res.status(500).json({ 
+          error: 'Maven command failed', 
+          details: error.message,
+          stderr 
+        });
+      }
+      
+      console.log('Maven command completed successfully');
+      res.json({ 
+        output: stdout,
+        stderr: stderr || null
+      });
+    });
+    
+  } catch (error) {
+    console.error('Error executing Maven command:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

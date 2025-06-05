@@ -1,3 +1,5 @@
+import { MavenVersionService } from './mavenVersionService';
+
 interface MuleDependency {
   groupId: string;
   artifactId: string;
@@ -13,6 +15,61 @@ interface MuleConnector {
   isDeprecated: boolean;
   cloudHub2Alternative?: string;
 }
+
+// Keep static versions as fallback
+const fallbackConnectorVersions: Record<string, string> = {
+  'mule-marketo-connector': '3.0.9',
+  'mule-oauth-module': '1.1.21',
+  'mule-amazon-ec2-connector': '2.5.8',
+  'mule-amazon-s3-connector': '7.0.5',
+  'mule-amazon-sns-connector': '4.7.11',
+  'mule-amazon-sqs-connector': '5.11.15',
+  'mule-amqp-connector': '1.8.2',
+  'anypoint-mq-connector': '4.0.12',
+  'mule-cassandradb-connector': '4.1.3',
+  'mule-kafka-connector': '4.10.1',
+  'mule-azure-service-bus-connector': '3.4.1',
+  'mule-box-connector': '5.3.0',
+  'mule-file-connector': '1.5.3',
+  'mule-db-connector': '1.14.14',
+  'mule-cloudhub-connector': '1.2.0',
+  'mule-http-connector': '1.10.3',
+  'mule-ftp-connector': '2.0.0',
+  'mule-email-connector': '1.7.5',
+  'mule-microsoft-dotnet-connector': '3.1.8',
+  'mule-jms-connector': '1.10.1',
+  'mule-ldap-connector': '3.6.0',
+  'mule-microsoft-dynamics-gp-connector': '2.1.7',
+  'mule-microsoft-dynamics-crm-connector': '3.2.15',
+  'mule-microsoft-service-bus-connector': '2.2.7',
+  'mule-objectstore-connector': '1.2.2',
+  'mule-module-file-extension-common': '1.4.3',
+  'mule-powershell-connector': '2.1.3',
+  'mule-mongodb-connector': '6.3.10',
+  'mule-hdfs-connector': '6.0.26',
+  'mule-sharepoint-connector': '3.7.0',
+  'mule-neo4j-connector': '3.0.7',
+  'mule-peoplesoft-connector': '3.1.9',
+  'mule-oracle-ebs-122-connector': '2.3.1',
+  'mule-netsuite-openair-connector': '2.0.12',
+  'mule-netsuite-connector': '11.10.0',
+  'mule-redis-connector': '5.4.6',
+  'mule-salesforce-composite-connector': '2.18.1',
+  'mule-salesforce-connector': '11.1.0',
+  'mule-rosettanet-connector': '2.1.0',
+  'mule-sfdc-analytics-connector': '3.17.0',
+  'mule-sfdc-marketing-cloud-connector': '4.1.4',
+  'mule-sap-concur-connector': '4.2.3',
+  'mule-sftp-connector': '2.4.4',
+  'mule-sap-connector': '5.9.12',
+  'mule-servicenow-connector': '6.17.1',
+  'mule-wsc-connector': '1.11.1',
+  'mule-workday-connector': '16.3.0',
+  'mule-zuora-connector': '6.0.11',
+  'mule-twilio-connector': '4.2.9',
+  'mule-sockets-connector': '1.2.5',
+  'mule-xml-module': '1.4.2',
+};
 
 export const isMuleApplication = (pomXml: string): boolean => {
   console.log('Checking if application is Mule...');
@@ -62,7 +119,7 @@ export const isMuleApplication = (pomXml: string): boolean => {
   return isMatch;
 };
 
-export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
+export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
   console.log('Extracting Mule information...');
   console.log('Artifact JSON received:', artifactJson);
 
@@ -183,9 +240,9 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
   
   console.log(`Final extracted Java version: ${javaVersion}`);
 
-  // Dependencies extraction with better error handling
+  // Dependencies extraction with better error handling and dynamic version fetching
   const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
-  const dependencies = depMatches
+  const extractedDeps = depMatches
     .map(match => {
       const depXml = match[1];
       const groupId = (depXml.match(/<groupId>(.*?)<\/groupId>/) || [])[1] || '';
@@ -200,11 +257,45 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
         dep.groupId.includes('org.mule') ||
         dep.groupId.includes('com.mulesoft')
       )
-    )
-    .map(dep => {
+    );
+
+  // Fetch latest versions dynamically
+  console.log('Fetching latest versions for dependencies...');
+  let dependencies: MuleDependency[] = [];
+  
+  try {
+    const mavenDeps = extractedDeps.map(dep => ({
+      groupId: dep.groupId,
+      artifactId: dep.artifactId,
+      currentVersion: dep.version
+    }));
+
+    const versionUpdates = await MavenVersionService.getLatestVersionsBatch(mavenDeps);
+    
+    dependencies = versionUpdates.map(update => {
+      const isDeprecated = checkIfDeprecated(update.groupId, update.artifactId);
+      const replacement = getReplacementDependency(update.groupId, update.artifactId);
+      
+      return {
+        groupId: update.groupId,
+        artifactId: update.artifactId,
+        version: update.currentVersion,
+        latestVersion: update.latestVersion,
+        isDeprecated,
+        replacement
+      };
+    });
+    
+    console.log(`Successfully fetched latest versions for ${dependencies.length} dependencies`);
+  } catch (error) {
+    console.error('Error fetching latest versions, using fallback:', error);
+    
+    // Fallback to static versions if dynamic fetching fails
+    dependencies = extractedDeps.map(dep => {
       const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
       const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
-      const latestVersion = getLatestVersion(dep.groupId, dep.artifactId, dep.version);
+      const latestVersion = getLatestVersionFallback(dep.groupId, dep.artifactId, dep.version);
+      
       return {
         groupId: dep.groupId,
         artifactId: dep.artifactId,
@@ -214,6 +305,7 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
         replacement
       };
     });
+  }
 
   console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies: dependencies.length });
   return { applicationName, muleRuntime, muleVersion, javaVersion, dependencies };
@@ -367,62 +459,8 @@ const getReplacementDependency = (groupId: string, artifactId: string): string |
   return replacements[artifactId];
 };
 
-const latestConnectorVersions: Record<string, string> = {
-  'mule-marketo-connector': '3.0.9',
-  'mule-oauth-module': '1.1.21',
-  'mule-amazon-ec2-connector': '2.5.8',
-  'mule-amazon-s3-connector': '7.0.5',
-  'mule-amazon-sns-connector': '4.7.11',
-  'mule-amazon-sqs-connector': '5.11.15',
-  'mule-amqp-connector': '1.8.2',
-  'anypoint-mq-connector': '4.0.12',
-  'mule-cassandradb-connector': '4.1.3',
-  'mule-kafka-connector': '4.10.1',
-  'mule-azure-service-bus-connector': '3.4.1',
-  'mule-box-connector': '5.3.0',
-  'mule-file-connector': '1.5.3',
-  'mule-db-connector': '1.14.14',
-  'mule-cloudhub-connector': '1.2.0',
-  'mule-http-connector': '1.10.3',
-  'mule-ftp-connector': '2.0.0',
-  'mule-email-connector': '1.7.5',
-  'mule-microsoft-dotnet-connector': '3.1.8',
-  'mule-jms-connector': '1.10.1',
-  'mule-ldap-connector': '3.6.0',
-  'mule-microsoft-dynamics-gp-connector': '2.1.7',
-  'mule-microsoft-dynamics-crm-connector': '3.2.15',
-  'mule-microsoft-service-bus-connector': '2.2.7',
-  'mule-objectstore-connector': '1.2.2',
-  'mule-module-file-extension-common': '1.4.3',
-  'mule-powershell-connector': '2.1.3',
-  'mule-mongodb-connector': '6.3.10',
-  'mule-hdfs-connector': '6.0.26',
-  'mule-sharepoint-connector': '3.7.0',
-  'mule-neo4j-connector': '3.0.7',
-  'mule-peoplesoft-connector': '3.1.9',
-  'mule-oracle-ebs-122-connector': '2.3.1',
-  'mule-netsuite-openair-connector': '2.0.12',
-  'mule-netsuite-connector': '11.10.0',
-  'mule-redis-connector': '5.4.6',
-  'mule-salesforce-composite-connector': '2.18.1',
-  'mule-salesforce-connector': '11.1.0',
-  'mule-rosettanet-connector': '2.1.0',
-  'mule-sfdc-analytics-connector': '3.17.0',
-  'mule-sfdc-marketing-cloud-connector': '4.1.4',
-  'mule-sap-concur-connector': '4.2.3',
-  'mule-sftp-connector': '2.4.4',
-  'mule-sap-connector': '5.9.12',
-  'mule-servicenow-connector': '6.17.1',
-  'mule-wsc-connector': '1.11.1',
-  'mule-workday-connector': '16.3.0',
-  'mule-zuora-connector': '6.0.11',
-  'mule-twilio-connector': '4.2.9',
-  'mule-sockets-connector': '1.2.5',
-  'mule-xml-module': '1.4.2',
-};
-
-const getLatestVersion = (groupId: string, artifactId: string, currentVersion: string): string => {
-  return latestConnectorVersions[artifactId] || currentVersion;
+const getLatestVersionFallback = (groupId: string, artifactId: string, currentVersion: string): string => {
+  return fallbackConnectorVersions[artifactId] || currentVersion;
 };
 
 const isDeprecatedConnector = (namespace: string): boolean => {
@@ -476,3 +514,6 @@ export const extractAzureOrganization = (url: string): string => {
   if (vsMatch) return vsMatch[1];
   return '';
 };
+
+// Export the MavenVersionService for use in other components
+export { MavenVersionService };
