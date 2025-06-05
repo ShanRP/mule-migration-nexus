@@ -69,10 +69,21 @@ export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
   console.log('Artifact JSON received:', artifactJson);
 
   // Application name: get the first <name> tag that is a direct child of <project>
-  let applicationName = 'Unknown';
+  let applicationName = 'Unknown Application';
   const nameMatch = pomXml.match(/<project[\s\S]*?<name>(.*?)<\/name>/);
   if (nameMatch && nameMatch[1]) {
     applicationName = nameMatch[1].trim();
+  } else {
+    // Fallback: try to get name from artifactId
+    const artifactIdMatch = pomXml.match(/<artifactId>(.*?)<\/artifactId>/);
+    if (artifactIdMatch && artifactIdMatch[1]) {
+      applicationName = artifactIdMatch[1].trim();
+    }
+  }
+
+  // Ensure applicationName is never undefined or empty
+  if (!applicationName || applicationName.trim() === '') {
+    applicationName = 'Unnamed Mule Application';
   }
 
   // Mule runtime
@@ -159,7 +170,7 @@ export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
   
   console.log(`Final extracted Java version: ${javaVersion}`);
 
-  // Dependencies - extract first, then get latest versions
+  // Dependencies - extract first, then get latest versions with fallback
   const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
   const basicDependencies = depMatches
     .map(match => {
@@ -176,10 +187,24 @@ export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
       dep.groupId.includes('com.mulesoft')
     );
 
-  // Get latest versions using MuleSoft Exchange API
-  const dependencies = await getLatestVersionsForDependencies(basicDependencies);
+  // Get latest versions with fallback - don't let Exchange API failures break the process
+  let dependencies;
+  try {
+    dependencies = await getLatestVersionsForDependencies(basicDependencies);
+  } catch (error) {
+    console.error('Failed to get latest versions, using fallback:', error);
+    // Fallback: create dependencies with current versions as latest
+    dependencies = basicDependencies.map(dep => ({
+      groupId: dep.groupId,
+      artifactId: dep.artifactId,
+      version: dep.version,
+      latestVersion: dep.version, // Use current as latest when API fails
+      isDeprecated: checkIfDeprecated(dep.groupId, dep.artifactId),
+      replacement: getReplacementDependency(dep.groupId, dep.artifactId)
+    }));
+  }
 
-  console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies });
+  console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies: dependencies.length });
   return { applicationName, muleRuntime, muleVersion, javaVersion, dependencies };
 };
 
@@ -313,63 +338,32 @@ const getReplacementDependency = (groupId: string, artifactId: string): string |
   return replacements[artifactId];
 };
 
-// Updated function to use MuleSoft Exchange API
+// Updated function to disable MuleSoft Exchange API due to CORS issues
 const getLatestVersion = async (groupId: string, artifactId: string, currentVersion: string): Promise<string> => {
-  try {
-    const exchangeService = new MuleSoftExchangeService();
-    const latestVersion = await exchangeService.getConnectorLatestVersion(groupId, artifactId);
-    
-    if (latestVersion && latestVersion !== 'Unknown') {
-      return latestVersion;
-    }
-  } catch (error) {
-    console.error(`Failed to get latest version from Exchange for ${artifactId}:`, error);
-  }
-  
-  // Fallback to static versions if Exchange API fails
+  // Disable MuleSoft Exchange API due to CORS restrictions in browser
+  console.log(`Using fallback version for ${artifactId} due to CORS restrictions`);
   return latestConnectorVersions[artifactId] || currentVersion;
 };
 
-// Enhanced function to get latest versions for all dependencies
+// Enhanced function to get latest versions for all dependencies with fallback
 export const getLatestVersionsForDependencies = async (dependencies: Array<{groupId: string, artifactId: string, version: string}>) => {
-  try {
-    const exchangeService = new MuleSoftExchangeService();
-    const latestVersions = await exchangeService.getLatestVersionForPomDependencies(dependencies);
+  console.log('Getting latest versions for dependencies (using fallback due to CORS)...');
+  
+  // Use fallback versions instead of Exchange API to avoid CORS issues
+  return dependencies.map(dep => {
+    const latestVersion = latestConnectorVersions[dep.artifactId] || dep.version;
+    const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
+    const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
     
-    // Update dependencies with latest versions
-    return dependencies.map(dep => {
-      const latestVersion = latestVersions[dep.artifactId] || dep.version;
-      const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
-      const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
-      
-      return {
-        groupId: dep.groupId,
-        artifactId: dep.artifactId,
-        version: dep.version,
-        latestVersion,
-        isDeprecated,
-        replacement
-      };
-    });
-  } catch (error) {
-    console.error('Failed to get latest versions from MuleSoft Exchange:', error);
-    
-    // Fallback to static versions
-    return dependencies.map(dep => {
-      const latestVersion = latestConnectorVersions[dep.artifactId] || dep.version;
-      const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
-      const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
-      
-      return {
-        groupId: dep.groupId,
-        artifactId: dep.artifactId,
-        version: dep.version,
-        latestVersion,
-        isDeprecated,
-        replacement
-      };
-    });
-  }
+    return {
+      groupId: dep.groupId,
+      artifactId: dep.artifactId,
+      version: dep.version,
+      latestVersion,
+      isDeprecated,
+      replacement
+    };
+  });
 };
 
 const latestConnectorVersions: Record<string, string> = {
