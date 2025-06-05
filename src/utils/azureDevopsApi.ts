@@ -1,4 +1,3 @@
-
 import axios from 'axios';
 
 const AZURE_PROXY_BASE = 'http://localhost:3031/api/azure';
@@ -111,7 +110,6 @@ export class AzureDevOpsAPI {
 
   async getFileContent(projectName: string, repositoryId: string, filePath: string): Promise<string | null> {
     try {
-      console.log(`Fetching file content for: ${filePath}`);
       const response = await axios.post(`${AZURE_PROXY_BASE}/fileContent`, {
         organization: this.organization,
         project: projectName,
@@ -119,41 +117,18 @@ export class AzureDevOpsAPI {
         filePath,
         token: this.token
       });
-      
-      console.log(`Raw response for ${filePath}:`, response.data);
-      
-      if (response.data && response.data.content !== undefined) {
-        // Handle different content types
-        let content = response.data.content;
-        
-        // If content is an object, try to stringify it first, then check if it's actually a string
-        if (typeof content === 'object' && content !== null) {
-          console.log(`Content is object for ${filePath}:`, content);
-          // This might be an already parsed JSON object, convert back to string
-          content = JSON.stringify(content);
-        }
-        
-        // Ensure we return a string
-        if (typeof content === 'string') {
-          console.log(`Returning string content for ${filePath}, length: ${content.length}`);
-          return content;
-        } else {
-          console.log(`Converting content to string for ${filePath}:`, typeof content);
-          return String(content);
-        }
+      if (response.data && typeof response.data.content === 'string') {
+        return response.data.content;
       }
-      
-      console.log(`No valid content found for ${filePath}`);
       return null;
     } catch (error) {
-      console.error(`Error fetching file content for ${filePath}:`, error);
+      console.error('Error fetching file content:', error);
       return null;
     }
   }
 
   async createBranch(projectName: string, repositoryId: string, branchName: string, sourceBranch: string): Promise<boolean> {
     try {
-      console.log(`Creating branch ${branchName} from ${sourceBranch} for repo ${repositoryId}`);
       const response = await axios.post(`${AZURE_PROXY_BASE}/createBranch`, {
         organization: this.organization,
         project: projectName,
@@ -162,7 +137,6 @@ export class AzureDevOpsAPI {
         sourceBranch,
         token: this.token
       });
-      console.log('Branch creation response:', response.data);
       return response.data && response.data.success;
     } catch (error) {
       console.error('Error creating branch:', error);
@@ -172,7 +146,6 @@ export class AzureDevOpsAPI {
 
   async commitFiles(projectName: string, repositoryId: string, branchName: string, files: Array<{path: string, content: string}>, message: string): Promise<boolean> {
     try {
-      console.log(`Committing ${files.length} files to branch ${branchName}`);
       const response = await axios.post(`${AZURE_PROXY_BASE}/commitFiles`, {
         organization: this.organization,
         project: projectName,
@@ -182,7 +155,6 @@ export class AzureDevOpsAPI {
         message,
         token: this.token
       });
-      console.log('Commit response:', response.data);
       return response.data && response.data.success;
     } catch (error) {
       console.error('Error committing files:', error);

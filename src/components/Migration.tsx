@@ -340,44 +340,33 @@ const Migration = () => {
       // Prepare files for commit
       const filesToCommit = [];
       
-      // Update POM files with proper error handling
+      // Update POM files
       console.log(`Processing POM files for Azure DevOps:`, app.pomPaths);
       for (const pomPath of app.pomPaths) {
         try {
           console.log(`Fetching pom.xml: ${pomPath}`);
           const pomContent = await azureApi.getFileContent(project, repositoryId, pomPath);
-          
           if (pomContent && typeof pomContent === 'string') {
-            console.log(`POM content type: ${typeof pomContent}, length: ${pomContent.length}`);
             const updatedPom = updatePomXmlWithLatestVersions(pomContent, app.dependencies);
             filesToCommit.push({ path: pomPath, content: updatedPom });
           } else {
-            console.warn(`Could not fetch or invalid POM file: ${pomPath}, content type: ${typeof pomContent}`);
+            console.warn(`Could not fetch or invalid POM file: ${pomPath}`);
           }
         } catch (error) {
           console.error(`Failed to process ${pomPath}:`, error);
         }
       }
       
-      // Update artifact JSON files with proper type handling
+      // Update artifact JSON files
       console.log(`Processing artifact JSON files for Azure DevOps:`, app.artifactJsonPaths);
       for (const ajPath of app.artifactJsonPaths) {
         try {
           console.log(`Fetching mule-artifact.json: ${ajPath}`);
           const ajContent = await azureApi.getFileContent(project, repositoryId, ajPath);
-          
           if (ajContent) {
-            console.log(`Artifact JSON content type: ${typeof ajContent}`);
-            
             let ajJson;
             if (typeof ajContent === 'string') {
-              try {
-                ajJson = JSON.parse(ajContent);
-              } catch (parseError) {
-                console.error(`Failed to parse JSON for ${ajPath}:`, parseError);
-                console.log(`Raw content: ${ajContent}`);
-                continue;
-              }
+              ajJson = JSON.parse(ajContent);
             } else if (typeof ajContent === 'object') {
               ajJson = ajContent;
             } else {
@@ -395,19 +384,17 @@ const Migration = () => {
         }
       }
       
-      // Update project XML files with proper type checking
+      // Update project XML files
       console.log(`Processing project XML files for Azure DevOps:`, app.projectXmlPaths);
       for (const xmlPath of app.projectXmlPaths) {
         try {
           console.log(`Fetching project XML: ${xmlPath}`);
           const xmlContent = await azureApi.getFileContent(project, repositoryId, xmlPath);
-          
           if (xmlContent && typeof xmlContent === 'string') {
-            console.log(`XML content type: ${typeof xmlContent}, length: ${xmlContent.length}`);
             const updatedXml = updateProjectXml(xmlContent);
             filesToCommit.push({ path: xmlPath, content: updatedXml });
           } else {
-            console.warn(`Could not fetch or invalid XML file: ${xmlPath}, content type: ${typeof xmlContent}`);
+            console.warn(`Could not fetch or invalid XML file: ${xmlPath}`);
           }
         } catch (error) {
           console.error(`Failed to process ${xmlPath}:`, error);
@@ -496,7 +483,7 @@ const Migration = () => {
     ));
   };
 
-  // Helper to update pom.xml content with latest versions - Fixed type checking
+  // Helper to update pom.xml content with latest versions
   const updatePomXmlWithLatestVersions = (pomXml: string, dependencies: MuleDependency[]) => {
     if (typeof pomXml !== 'string') {
       console.error('POM XML is not a string:', typeof pomXml);
@@ -534,7 +521,7 @@ const Migration = () => {
     return artifactJson;
   };
 
-  // Helper to update src/main/*.xml - Fixed type checking
+  // Helper to update src/main/*.xml (for demo, just add a migration comment)
   const updateProjectXml = (xml: string) => {
     if (typeof xml !== 'string') {
       console.error('XML content is not a string:', typeof xml);
