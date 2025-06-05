@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -56,6 +56,20 @@ const Dashboard = () => {
   const [fetchingRepos, setFetchingRepos] = useState(false);
   const [showRepositories, setShowRepositories] = useState(false);
   const [migrating, setMigrating] = useState(false);
+  const [activeTab, setActiveTab] = useState<'github' | 'azure'>('github');
+
+  // Reset state when organization changes
+  useEffect(() => {
+    setShowRepositories(false);
+    setApplications([]);
+    setGithubToken('');
+    setAzureToken('');
+    setAzureOrgUrl('');
+    // Set active tab based on organization's repository type
+    if (selectedOrganization?.repository_type) {
+      setActiveTab(selectedOrganization.repository_type === 'azure_devops' ? 'azure' : 'github');
+    }
+  }, [selectedOrganization?.id, selectedOrganization?.repository_type]);
 
   const handleConnectGithub = async () => {
     if (!githubToken.trim()) {
@@ -972,7 +986,7 @@ const Dashboard = () => {
   const isConnected = selectedOrganization?.github_token || selectedOrganization?.azure_devops_token;
 
   if (showRepositories && applications.length > 0) {
-  return (
+    return (
       <div className="container mx-auto p-6 max-w-full w-full overflow-x-auto">
         <div className="flex justify-between items-center mb-6">
           <Button 
@@ -1005,7 +1019,11 @@ const Dashboard = () => {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue="github" className="w-full">
+          <Tabs 
+            value={activeTab} 
+            onValueChange={(value) => setActiveTab(value as 'github' | 'azure')} 
+            className="w-full"
+          >
             <TabsList className="w-full grid grid-cols-2 mb-4">
               <TabsTrigger value="github">
                 <Github className="h-4 w-4 mr-2" /> GitHub
@@ -1091,8 +1109,8 @@ const Dashboard = () => {
               </Button>
             </div>
           )}
-          </CardContent>
-        </Card>
+        </CardContent>
+      </Card>
     </div>
   );
 };

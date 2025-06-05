@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/AuthProvider";
 import { useOrganizations } from "@/providers/OrganizationProvider";
@@ -23,6 +22,10 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import SettingsDialog from "./SettingsDialog";
+import { supabase } from "@/integrations/supabase/client";
+import { useEffect } from "react";
 
 const Header = () => {
   const { user, logout } = useAuth();
@@ -35,8 +38,32 @@ const Header = () => {
   } = useOrganizations();
   
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [newOrgName, setNewOrgName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const [userProfile, setUserProfile] = useState<{ full_name: string | null; avatar_url: string | null } | null>(null);
+  const settingsButtonRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const fetchUserProfile = async () => {
+      if (!user) return;
+
+      try {
+        const { data: profile, error } = await supabase
+          .from('profiles')
+          .select('full_name, avatar_url')
+          .eq('id', user.id)
+          .single();
+
+        if (error) throw error;
+        setUserProfile(profile);
+      } catch (error) {
+        console.error('Error fetching user profile:', error);
+      }
+    };
+
+    fetchUserProfile();
+  }, [user]);
 
   const handleCreateOrganization = async () => {
     if (!newOrgName.trim()) return;
@@ -166,18 +193,27 @@ const Header = () => {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="flex items-center space-x-2">
-                  <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center">
-                    <span className="text-sm font-medium text-gray-700">
-                      {user?.email?.[0]?.toUpperCase() || 'U'}
-                    </span>
-                  </div>
+                  <Avatar className="h-8 w-8">
+                    <AvatarImage src={userProfile?.avatar_url || undefined} alt={userProfile?.full_name || user?.email || 'User'} />
+                    <AvatarFallback>
+                      {(userProfile?.full_name || user?.email || 'U')[0].toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
                   <ChevronDown className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuLabel>{user?.email}</DropdownMenuLabel>
+                <DropdownMenuLabel>
+                  <div className="flex flex-col space-y-1">
+                    <span className="font-medium">{userProfile?.full_name || 'User'}</span>
+                    <span className="text-xs text-gray-500">{user?.email}</span>
+                  </div>
+                </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem>
+                <DropdownMenuItem 
+                  ref={settingsButtonRef}
+                  onClick={() => setIsSettingsDialogOpen(true)}
+                >
                   <Settings className="mr-2 h-4 w-4" />
                   Settings
                 </DropdownMenuItem>
@@ -190,6 +226,17 @@ const Header = () => {
           </div>
         </div>
       </div>
+
+      {/* Settings Dialog */}
+      <SettingsDialog 
+        isOpen={isSettingsDialogOpen} 
+        onClose={() => {
+          setIsSettingsDialogOpen(false);
+          setTimeout(() => {
+            settingsButtonRef.current?.focus();
+          }, 0);
+        }} 
+      />
     </header>
   );
 };

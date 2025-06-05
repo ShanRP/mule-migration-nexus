@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,19 +5,28 @@ import { Github, Chrome, Building } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 import { useToast } from "@/hooks/use-toast";
 import { useSearchParams, useNavigate } from "react-router-dom";
+import { Loader2 } from "lucide-react";
 
 const AuthPage = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const mode = searchParams.get('mode') || 'signin';
-  const { login } = useAuth();
+  const { login, user, loading: authLoading } = useAuth();
   const { toast } = useToast();
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (user && !authLoading) {
+      navigate('/');
+    }
+  }, [user, authLoading, navigate]);
 
   const handleOAuthLogin = async (provider: 'github' | 'google' | 'azure') => {
     setIsLoading(true);
     try {
       await login(provider);
+      // Note: We don't need to navigate here as the auth state change will handle it
     } catch (error: any) {
       toast({
         title: "Authentication Error",
@@ -45,11 +53,20 @@ const AuthPage = () => {
     return `${action} with ${provider}`;
   };
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+        <div className="flex flex-col items-center space-y-4">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
       <div className="w-full max-w-md p-6">
-        
-
         <Card className="w-full">
           <CardHeader className="text-center">
             <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-blue-600 flex items-center justify-center">
@@ -68,7 +85,11 @@ const AuthPage = () => {
                 onClick={() => handleOAuthLogin("github")}
                 disabled={isLoading}
               >
-                <Github className="mr-2 h-5 w-5" />
+                {isLoading ? (
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                ) : (
+                  <Github className="mr-2 h-5 w-5" />
+                )}
                 {getButtonText("GitHub")}
               </Button>
               <Button
@@ -77,7 +98,11 @@ const AuthPage = () => {
                 onClick={() => handleOAuthLogin("google")}
                 disabled={isLoading}
               >
-                <Chrome className="mr-2 h-5 w-5" />
+                {isLoading ? (
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                ) : (
+                  <Chrome className="mr-2 h-5 w-5" />
+                )}
                 {getButtonText("Google")}
               </Button>
               <Button
@@ -86,7 +111,11 @@ const AuthPage = () => {
                 onClick={() => handleOAuthLogin("azure")}
                 disabled={isLoading}
               >
-                <Building className="mr-2 h-5 w-5" />
+                {isLoading ? (
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                ) : (
+                  <Building className="mr-2 h-5 w-5" />
+                )}
                 {getButtonText("Azure AD")}
               </Button>
             </div>

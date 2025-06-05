@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -51,6 +51,12 @@ const Migration = () => {
   const repositoryType = selectedOrganization?.repository_type;
   const githubToken = selectedOrganization?.github_token || '';
   const azureToken = selectedOrganization?.azure_devops_token || '';
+
+  // Reset state when organization changes
+  useEffect(() => {
+    setApplications([]);
+    setError(null);
+  }, [selectedOrganization?.id]);
 
   // GitHub file operations
   const fetchGitHubFileContent = async (repoFullName: string, filePath: string, token: string): Promise<string | null> => {
@@ -441,6 +447,17 @@ const Migration = () => {
       toast.error('Please connect to a source control provider in the Dashboard.');
       return;
     }
+
+    // Validate repository type matches the available token
+    if (repositoryType === 'github' && !githubToken) {
+      toast.error('GitHub token not found. Please connect GitHub in the Dashboard.');
+      return;
+    }
+    if (repositoryType === 'azure_devops' && !azureToken) {
+      toast.error('Azure DevOps token not found. Please connect Azure DevOps in the Dashboard.');
+      return;
+    }
+
     setFetchingRepos(true);
     setError(null);
     setApplications([]);

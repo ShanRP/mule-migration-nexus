@@ -1,7 +1,7 @@
-
 import { createContext, useContext, ReactNode, useEffect, useState } from "react";
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 interface AuthContextType {
   user: User | null;
@@ -31,12 +31,36 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const { toast } = useToast();
 
   useEffect(() => {
     // Set up auth state listener first
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
+      async (event, session) => {
         console.log('Auth state changed:', event, session);
+        
+        if (event === 'SIGNED_IN') {
+          try {
+            // Ensure we have the user's email
+            if (session?.user && !session.user.email) {
+              const { data: { user }, error } = await supabase.auth.getUser();
+              if (error) throw error;
+              if (user) {
+                session.user = user;
+              }
+            }
+          } catch (error) {
+            console.error('Error getting user email:', error);
+            toast({
+              title: "Authentication Error",
+              description: "Failed to get user email. Please try again.",
+              variant: "destructive"
+            });
+            await supabase.auth.signOut();
+            return;
+          }
+        }
+        
         setSession(session);
         setUser(session?.user ?? null);
         setLoading(false);
@@ -51,7 +75,7 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [toast]);
 
   const login = async (provider: 'github' | 'google' | 'azure') => {
     const redirectUrl = `${window.location.origin}/`;
@@ -70,23 +94,46 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
         break;
     }
 
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: supabaseProvider,
-      options: {
-        redirectTo: redirectUrl
-      }
-    });
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: supabaseProvider,
+        options: {
+          redirectTo: redirectUrl,
+          scopes: provider === 'azure' ? 'email profile openid' : undefined,
+          queryParams: provider === 'azure' ? {
+            prompt: 'select_account'
+          } : undefined
+        }
+      });
 
-    if (error) {
+      if (error) {
+        console.error('Login error:', error);
+        throw error;
+      }
+    } catch (error: any) {
       console.error('Login error:', error);
+      toast({
+        title: "Authentication Error",
+        description: error.message || "Failed to authenticate",
+        variant: "destructive"
+      });
       throw error;
     }
   };
 
   const logout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      console.error('Logout error:', error);
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error('Logout error:', error);
+        throw error;
+      }
+    } catch (error: any) {
+      toast({
+        title: "Logout Error",
+        description: error.message || "Failed to logout",
+        variant: "destructive"
+      });
       throw error;
     }
   };
@@ -94,22 +141,40 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
   const signUp = async (email: string, password: string) => {
     const redirectUrl = `${window.location.origin}/`;
     
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: redirectUrl
-      }
-    });
-    return { error };
+    try {
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: redirectUrl
+        }
+      });
+      return { error };
+    } catch (error: any) {
+      toast({
+        title: "Sign Up Error",
+        description: error.message || "Failed to sign up",
+        variant: "destructive"
+      });
+      return { error };
+    }
   };
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password
-    });
-    return { error };
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+      return { error };
+    } catch (error: any) {
+      toast({
+        title: "Sign In Error",
+        description: error.message || "Failed to sign in",
+        variant: "destructive"
+      });
+      return { error };
+    }
   };
 
   const value = {
