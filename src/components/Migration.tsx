@@ -621,11 +621,11 @@ const Migration = () => {
   return (
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center mb-6">
-        <div>
+      <div>
           <h1 className="text-3xl font-bold text-gray-900">Mule Application Migration</h1>
-          <p className="text-gray-600 mt-1">
+        <p className="text-gray-600 mt-1">
             Scan your repositories and migrate Mule applications to CloudHub 2.0
-          </p>
+        </p>
         </div>
         <Button onClick={handleFetchRepositories} disabled={fetchingRepos}>
           <RefreshCw className={`h-4 w-4 mr-2 ${fetchingRepos ? 'animate-spin' : ''}`} />
@@ -713,9 +713,9 @@ const Migration = () => {
                           {app.dependencies.length > 3 && (
                             <div className="text-xs text-gray-500">
                               +{app.dependencies.length - 3} more
-                            </div>
+                      </div>
                           )}
-                        </div>
+                    </div>
                       </TableCell>
                       <TableCell className="border border-gray-300">
                         <div className="space-y-1">
@@ -730,14 +730,14 @@ const Migration = () => {
                                   Replace with {conn.replacement}
                                 </Badge>
                               )}
-                            </div>
+                    </div>
                           ))}
                           {app.connectors.length > 3 && (
                             <div className="text-xs text-gray-500">
                               +{app.connectors.length - 3} more
-                            </div>
+                  </div>
                           )}
-                        </div>
+                    </div>
                       </TableCell>
                       <TableCell className="border border-gray-300">
                         {app.artifactJson && (
@@ -748,14 +748,14 @@ const Migration = () => {
                                 <Badge variant="secondary" className="text-xs">
                                   {String(value)}
                                 </Badge>
-                              </div>
+                    </div>
                             ))}
                             {Object.entries(app.artifactJson).length > 3 && (
                               <div className="text-xs text-gray-500">
                                 +{Object.entries(app.artifactJson).length - 3} more
-                              </div>
+                    </div>
                             )}
-                          </div>
+                  </div>
                         )}
                       </TableCell>
                       <TableCell className="border border-gray-300">
@@ -765,9 +765,9 @@ const Migration = () => {
                           {app.dependencies.map(dep => (
                             <div key={dep.artifactId} className="text-xs">
                               {dep.artifactId}: {dep.latestVersion}
-                            </div>
-                          ))}
-                        </div>
+                </div>
+              ))}
+            </div>
                       </TableCell>
                       <TableCell className="border border-gray-300">
                         <div className="flex items-center space-x-2">
@@ -775,7 +775,7 @@ const Migration = () => {
                           <span className={getStatusColor(app.status)}>
                             {app.status.replace('_', ' ')}
                           </span>
-                        </div>
+                </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -783,8 +783,8 @@ const Migration = () => {
               </Table>
             </div>
           )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
       <div className="flex justify-end mt-4">
         <Button
           onClick={handleMigrateSelected}

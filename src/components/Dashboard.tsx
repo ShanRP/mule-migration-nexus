@@ -551,7 +551,7 @@ const Dashboard = () => {
   const isConnected = selectedOrganization?.github_token || selectedOrganization?.azure_devops_token;
 
   if (showRepositories && applications.length > 0) {
-    return (
+  return (
       <div className="container mx-auto p-6 max-w-full w-full overflow-x-auto">
         <div className="flex justify-between items-center mb-6">
           <Button 
@@ -666,8 +666,8 @@ const Dashboard = () => {
               </Button>
             </div>
           )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
     </div>
   );
 };
