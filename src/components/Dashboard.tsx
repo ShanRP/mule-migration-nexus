@@ -8,6 +8,7 @@ import { Github, Cloud, RefreshCw } from 'lucide-react';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import RepositoryList from './RepositoryList';
 import { isMuleApplication, extractMuleInfo, analyzeMuleConfiguration, extractAzureOrganization } from '@/utils/muleDetection';
+import { createAzureDevOpsAPI } from '@/utils/azureDevopsApi';
 import axios from 'axios';
 
 interface MuleDependency {
@@ -107,67 +108,6 @@ const Dashboard = () => {
     return null;
   };
 
-  const fetchAzureFileContent = async (organization: string, project: string, repoId: string, filePath: string, token: string): Promise<string | null> => {
-    try {
-      console.log(`Fetching ${filePath} from Azure DevOps repo ${organization}/${project}/${repoId}`);
-      
-      // Try multiple CORS proxy services in order of preference
-      const proxyServices = [
-        'https://api.allorigins.win/raw?url=',
-        'https://cors-anywhere.herokuapp.com/',
-        'https://thingproxy.freeboard.io/fetch/'
-      ];
-      
-      const targetUrl = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoId}/items?path=${encodeURIComponent('/' + filePath)}&api-version=6.0`;
-      
-      for (const proxyUrl of proxyServices) {
-        try {
-          console.log(`Trying proxy: ${proxyUrl}`);
-          const fullUrl = proxyUrl + encodeURIComponent(targetUrl);
-          
-          const response = await axios.get(fullUrl, {
-            headers: {
-              'Authorization': `Basic ${btoa(':' + token)}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 10000
-          });
-          
-          if (response.data) {
-            console.log(`Successfully fetched ${filePath} from Azure DevOps using ${proxyUrl}`);
-            return response.data;
-          }
-        } catch (proxyError) {
-          console.log(`Proxy ${proxyUrl} failed:`, proxyError);
-          continue;
-        }
-      }
-      
-      // If all proxies fail, try direct request (might work in some environments)
-      try {
-        console.log('Attempting direct request to Azure DevOps...');
-        const response = await axios.get(targetUrl, {
-          headers: {
-            'Authorization': `Basic ${btoa(':' + token)}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 5000
-        });
-        
-        if (response.data) {
-          console.log(`Successfully fetched ${filePath} via direct request`);
-          return response.data;
-        }
-      } catch (directError) {
-        console.log('Direct request failed:', directError);
-      }
-      
-    } catch (error) {
-      console.log(`Could not fetch ${filePath} from Azure DevOps repo:`, error);
-    }
-    return null;
-  };
-
   const listAllGitHubFiles = async (repoFullName: string, path: string, token: string): Promise<string[]> => {
     let files: string[] = [];
     try {
@@ -197,75 +137,6 @@ const Dashboard = () => {
       }
     } catch (e) {
       console.log(`Error listing files in ${path}:`, e);
-    }
-    return files;
-  };
-
-  const listAllAzureFiles = async (organization: string, project: string, repoId: string, path: string, token: string): Promise<string[]> => {
-    let files: string[] = [];
-    try {
-      console.log(`Listing files in Azure DevOps repo: org=${organization}, project=${project}, repoId=${repoId}, path=${path}`);
-      
-      // Try multiple CORS proxy services
-      const proxyServices = [
-        'https://api.allorigins.win/raw?url=',
-        'https://cors-anywhere.herokuapp.com/',
-        'https://thingproxy.freeboard.io/fetch/'
-      ];
-      
-      const targetUrl = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repoId}/items?path=${encodeURIComponent(path)}&recursionLevel=Full&api-version=6.0`;
-      
-      for (const proxyUrl of proxyServices) {
-        try {
-          console.log(`Trying proxy for file listing: ${proxyUrl}`);
-          const fullUrl = proxyUrl + encodeURIComponent(targetUrl);
-          
-          const response = await axios.get(fullUrl, {
-            headers: {
-              'Authorization': `Basic ${btoa(':' + token)}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 15000
-          });
-          
-          if (response.data && response.data.value) {
-            files = response.data.value
-              .filter((item: any) => !item.isFolder && item.path && !item.path.includes('/target/'))
-              .map((item: any) => item.path.substring(1)); // Remove leading slash
-            console.log(`Successfully listed ${files.length} files from Azure DevOps using ${proxyUrl}`);
-            break;
-          }
-        } catch (proxyError) {
-          console.log(`File listing proxy ${proxyUrl} failed:`, proxyError);
-          continue;
-        }
-      }
-      
-      // If all proxies fail, try direct request
-      if (files.length === 0) {
-        try {
-          console.log('Attempting direct file listing request...');
-          const response = await axios.get(targetUrl, {
-            headers: {
-              'Authorization': `Basic ${btoa(':' + token)}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 10000
-          });
-          
-          if (response.data && response.data.value) {
-            files = response.data.value
-              .filter((item: any) => !item.isFolder && item.path && !item.path.includes('/target/'))
-              .map((item: any) => item.path.substring(1));
-            console.log(`Successfully listed ${files.length} files via direct request`);
-          }
-        } catch (directError) {
-          console.log('Direct file listing failed:', directError);
-        }
-      }
-      
-    } catch (error) {
-      console.log('Error listing Azure DevOps files:', error);
     }
     return files;
   };
@@ -430,265 +301,181 @@ const Dashboard = () => {
   };
 
   const scanAzureRepositories = async (token: string, organization: string) => {
-    let allRepos = [];
     try {
-      console.log('Scanning Azure DevOps repositories with improved CORS handling...');
+      console.log('Scanning Azure DevOps repositories using new API approach...');
       
-      // Try multiple CORS proxy services
-      const proxyServices = [
-        'https://api.allorigins.win/raw?url=',
-        'https://cors-anywhere.herokuapp.com/',
-        'https://thingproxy.freeboard.io/fetch/'
-      ];
+      const azureApi = createAzureDevOpsAPI(organization, token);
       
-      let projectsData = null;
+      // Get all projects
+      const projects = await azureApi.getProjects();
+      console.log(`Found ${projects.length} projects in organization ${organization}`);
       
-      // First get all projects
-      const projectsUrl = `https://dev.azure.com/${organization}/_apis/projects?api-version=6.0`;
-      
-      for (const proxyUrl of proxyServices) {
-        try {
-          console.log(`Trying proxy for projects: ${proxyUrl}`);
-          const projectsFullUrl = proxyUrl + encodeURIComponent(projectsUrl);
-          
-          const projectsResponse = await axios.get(projectsFullUrl, {
-            headers: {
-              'Authorization': `Basic ${btoa(':' + token)}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 15000
-          });
-          
-          projectsData = projectsResponse.data;
-          console.log(`Successfully fetched projects using ${proxyUrl}:`, projectsData.value?.length || 0);
-          break;
-        } catch (proxyError) {
-          console.log(`Projects proxy ${proxyUrl} failed:`, proxyError);
-          continue;
-        }
-      }
-      
-      // If all proxies fail, try direct request
-      if (!projectsData) {
-        try {
-          console.log('Attempting direct projects request...');
-          const projectsResponse = await axios.get(projectsUrl, {
-            headers: {
-              'Authorization': `Basic ${btoa(':' + token)}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 10000
-          });
-          projectsData = projectsResponse.data;
-          console.log('Successfully fetched projects via direct request:', projectsData.value?.length || 0);
-        } catch (directError) {
-          console.log('Direct projects request failed:', directError);
-          throw new Error('Unable to fetch Azure DevOps projects due to CORS restrictions');
-        }
-      }
-      
-      if (!projectsData || !projectsData.value || projectsData.value.length === 0) {
+      if (projects.length === 0) {
         console.log('No projects found in Azure DevOps organization');
         return [];
       }
       
-      // Then get repositories for each project
-      for (const project of projectsData.value) {
+      const allRepos = [];
+      
+      // Get repositories for each project
+      for (const project of projects) {
         try {
-          const reposUrl = `https://dev.azure.com/${organization}/${project.name}/_apis/git/repositories?api-version=6.0`;
-          let reposData = null;
+          console.log(`Fetching repositories for project: ${project.name}`);
+          const repos = await azureApi.getRepositories(project.name);
           
-          for (const proxyUrl of proxyServices) {
-            try {
-              console.log(`Trying proxy for repos in project ${project.name}: ${proxyUrl}`);
-              const reposFullUrl = proxyUrl + encodeURIComponent(reposUrl);
-              
-              const reposResponse = await axios.get(reposFullUrl, {
-                headers: {
-                  'Authorization': `Basic ${btoa(':' + token)}`,
-                  'Content-Type': 'application/json'
-                },
-                timeout: 15000
-              });
-              
-              reposData = reposResponse.data;
-              console.log(`Successfully fetched repos for project ${project.name} using ${proxyUrl}:`, reposData.value?.length || 0);
-              break;
-            } catch (proxyError) {
-              console.log(`Repos proxy ${proxyUrl} failed for project ${project.name}:`, proxyError);
-              continue;
-            }
-          }
-          
-          // If proxies fail, try direct request
-          if (!reposData) {
-            try {
-              console.log(`Attempting direct repos request for project ${project.name}...`);
-              const reposResponse = await axios.get(reposUrl, {
-                headers: {
-                  'Authorization': `Basic ${btoa(':' + token)}`,
-                  'Content-Type': 'application/json'
-                },
-                timeout: 10000
-              });
-              reposData = reposResponse.data;
-              console.log(`Successfully fetched repos for project ${project.name} via direct request`);
-            } catch (directError) {
-              console.log(`Direct repos request failed for project ${project.name}:`, directError);
-              continue;
-            }
-          }
-          
-          if (reposData && reposData.value) {
-            for (const repo of reposData.value) {
-              allRepos.push({
-                ...repo,
-                project: project.name,
-                organization,
-                repoId: repo.id
-              });
-            }
+          for (const repo of repos) {
+            allRepos.push({
+              ...repo,
+              project: project.name,
+              organization,
+              repoId: repo.id
+            });
           }
         } catch (error) {
           console.log(`Error fetching repos for project ${project.name}:`, error);
         }
       }
-    } catch (error) {
-      console.log('Error fetching Azure DevOps projects:', error);
-      throw error;
-    }
-
-    console.log(`Total Azure DevOps repositories to scan: ${allRepos.length}`);
-
-    const muleAppsMap = new Map<string, MuleApplication>(); // Use Map to avoid duplicates by repository
-    
-    for (const repo of allRepos) {
-      try {
-        console.log(`Scanning Azure DevOps repo: ${repo.name} (ID: ${repo.repoId}) in project ${repo.project}`);
-        
-        const allFiles = await listAllAzureFiles(organization, repo.project, repo.repoId, '', token);
-        console.log(`Found ${allFiles.length} total files in repo ${repo.name}`);
-        
-        const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
-        const artifactJsonFiles = allFiles.filter(f => f.endsWith('mule-artifact.json'));
-        const projectXmlFiles = allFiles.filter(f => f.endsWith('.xml') && f.includes('src/main/mule/'));
-        
-        console.log(`Found in ${repo.name}:`, { 
-          pomFiles: pomFiles.length, 
-          artifactJsonFiles: artifactJsonFiles.length, 
-          projectXmlFiles: projectXmlFiles.length 
-        });
-        
-        // Check if any POM file contains a Mule application
-        let isMuleRepo = false;
-        let mainPomPath = '';
-        let applicationInfo = null;
-        
-        for (const pomPath of pomFiles) {
-          console.log(`Processing pom.xml: ${pomPath}`);
-          const pomXml = await fetchAzureFileContent(organization, repo.project, repo.repoId, pomPath, token);
-          if (pomXml && isMuleApplication(pomXml)) {
-            console.log(`Found Mule application in: ${pomPath}`);
-            isMuleRepo = true;
-            mainPomPath = pomPath;
-            
-            const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/')) || '';
-            let artifactJson = null;
-            
-            const artifactJsonPaths = [
-              `${pomDir}/src/main/mule/mule-artifact.json`,
-              `${pomDir}/mule-artifact.json`,
-              `${pomDir}/src/main/resources/mule-artifact.json`
-            ].filter(path => path !== '/');
-            
-            for (const ajPath of artifactJsonPaths) {
-              console.log(`Looking for artifact JSON at: ${ajPath}`);
-              const artifactJsonContent = await fetchAzureFileContent(organization, repo.project, repo.repoId, ajPath, token);
-              if (artifactJsonContent) {
-                try {
-                  artifactJson = JSON.parse(artifactJsonContent);
-                  console.log('Successfully parsed artifact JSON:', artifactJson);
-                  break;
-                } catch (error) {
-                  console.log('Error parsing artifact JSON:', error);
+      
+      console.log(`Total Azure DevOps repositories to scan: ${allRepos.length}`);
+      
+      const muleAppsMap = new Map<string, MuleApplication>();
+      
+      for (const repo of allRepos) {
+        try {
+          console.log(`Scanning Azure DevOps repo: ${repo.name} (ID: ${repo.repoId}) in project ${repo.project}`);
+          
+          const allFiles = await azureApi.listFiles(repo.project, repo.repoId);
+          console.log(`Found ${allFiles.length} total files in repo ${repo.name}`);
+          
+          const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
+          const artifactJsonFiles = allFiles.filter(f => f.endsWith('mule-artifact.json'));
+          const projectXmlFiles = allFiles.filter(f => f.endsWith('.xml') && f.includes('src/main/mule/'));
+          
+          console.log(`Found in ${repo.name}:`, { 
+            pomFiles: pomFiles.length, 
+            artifactJsonFiles: artifactJsonFiles.length, 
+            projectXmlFiles: projectXmlFiles.length 
+          });
+          
+          // Check if any POM file contains a Mule application
+          let isMuleRepo = false;
+          let mainPomPath = '';
+          let applicationInfo = null;
+          
+          for (const pomPath of pomFiles) {
+            console.log(`Processing pom.xml: ${pomPath}`);
+            const pomXml = await azureApi.getFileContent(repo.project, repo.repoId, pomPath);
+            if (pomXml && isMuleApplication(pomXml)) {
+              console.log(`Found Mule application in: ${pomPath}`);
+              isMuleRepo = true;
+              mainPomPath = pomPath;
+              
+              const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/')) || '';
+              let artifactJson = null;
+              
+              const artifactJsonPaths = [
+                `${pomDir}/src/main/mule/mule-artifact.json`,
+                `${pomDir}/mule-artifact.json`,
+                `${pomDir}/src/main/resources/mule-artifact.json`
+              ].filter(path => path !== '/');
+              
+              for (const ajPath of artifactJsonPaths) {
+                console.log(`Looking for artifact JSON at: ${ajPath}`);
+                const artifactJsonContent = await azureApi.getFileContent(repo.project, repo.repoId, ajPath);
+                if (artifactJsonContent) {
+                  try {
+                    artifactJson = JSON.parse(artifactJsonContent);
+                    console.log('Successfully parsed artifact JSON:', artifactJson);
+                    break;
+                  } catch (error) {
+                    console.log('Error parsing artifact JSON:', error);
+                  }
                 }
               }
-            }
-            
-            applicationInfo = extractMuleInfo(pomXml, artifactJson);
-            console.log('Extracted Mule info:', { applicationName: applicationInfo.applicationName, muleRuntime: applicationInfo.muleRuntime, muleVersion: applicationInfo.muleVersion, javaVersion: applicationInfo.javaVersion, dependencies: applicationInfo.dependencies.length });
-            break; // Use the first valid Mule application found
-          }
-        }
-        
-        if (isMuleRepo && applicationInfo) {
-          console.log(`Processing Mule repository: ${repo.name}`);
-          
-          let connectors: any[] = [];
-          const configPaths = [
-            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule/mule-configuration.xml`,
-            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/app/mule-configuration.xml`,
-            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/resources/mule-configuration.xml`,
-            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/mule-configuration.xml`
-          ].filter(path => path !== '/');
-          
-          for (const configPath of configPaths) {
-            const configXml = await fetchAzureFileContent(organization, repo.project, repo.repoId, configPath, token);
-            if (configXml) {
-              connectors = analyzeMuleConfiguration(configXml);
-              console.log(`Found ${connectors.length} connectors in ${configPath}`);
+              
+              applicationInfo = extractMuleInfo(pomXml, artifactJson);
+              console.log('Extracted Mule info:', { 
+                applicationName: applicationInfo.applicationName, 
+                muleRuntime: applicationInfo.muleRuntime, 
+                muleVersion: applicationInfo.muleVersion, 
+                javaVersion: applicationInfo.javaVersion, 
+                dependencies: applicationInfo.dependencies.length 
+              });
               break;
             }
           }
           
-          if (connectors.length === 0) {
-            const muleDirPath = `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule`;
-            const muleFiles = allFiles.filter(f => f.startsWith(muleDirPath) && f.endsWith('.xml'));
-            console.log(`Checking ${muleFiles.length} XML files in mule directory`);
-            for (const xmlFile of muleFiles) {
-              const xmlContent = await fetchAzureFileContent(organization, repo.project, repo.repoId, xmlFile, token);
-              if (xmlContent) {
-                const fileConnectors = analyzeMuleConfiguration(xmlContent);
-                connectors = [...connectors, ...fileConnectors];
+          if (isMuleRepo && applicationInfo) {
+            console.log(`Processing Mule repository: ${repo.name}`);
+            
+            let connectors: any[] = [];
+            const configPaths = [
+              `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule/mule-configuration.xml`,
+              `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/app/mule-configuration.xml`,
+              `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/resources/mule-configuration.xml`,
+              `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/mule-configuration.xml`
+            ].filter(path => path !== '/');
+            
+            for (const configPath of configPaths) {
+              const configXml = await azureApi.getFileContent(repo.project, repo.repoId, configPath);
+              if (configXml) {
+                connectors = analyzeMuleConfiguration(configXml);
+                console.log(`Found ${connectors.length} connectors in ${configPath}`);
+                break;
               }
             }
+            
+            if (connectors.length === 0) {
+              const muleDirPath = `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule`;
+              const muleFiles = allFiles.filter(f => f.startsWith(muleDirPath) && f.endsWith('.xml'));
+              console.log(`Checking ${muleFiles.length} XML files in mule directory`);
+              for (const xmlFile of muleFiles) {
+                const xmlContent = await azureApi.getFileContent(repo.project, repo.repoId, xmlFile);
+                if (xmlContent) {
+                  const fileConnectors = analyzeMuleConfiguration(xmlContent);
+                  connectors = [...connectors, ...fileConnectors];
+                }
+              }
+            }
+            
+            console.log(`Total connectors found: ${connectors.length}`);
+            
+            const muleApp: MuleApplication = {
+              id: `${repo.repoId}`,
+              name: repo.name,
+              repository: repo.webUrl || `https://dev.azure.com/${organization}/${repo.project}/_git/${repo.name}`,
+              branch: repo.defaultBranch?.replace('refs/heads/', '') || 'main',
+              applicationName: applicationInfo.applicationName,
+              muleRuntime: applicationInfo.muleRuntime,
+              muleVersion: applicationInfo.muleVersion,
+              javaVersion: applicationInfo.javaVersion,
+              dependencies: applicationInfo.dependencies,
+              connectors,
+              status: 'pending',
+              lastUpdated: new Date().toISOString(),
+              pomPaths: pomFiles,
+              artifactJsonPaths: artifactJsonFiles,
+              projectXmlPaths: projectXmlFiles
+            };
+            
+            if (!muleAppsMap.has(repo.repoId)) {
+              muleAppsMap.set(repo.repoId, muleApp);
+              console.log(`Added unique Mule app: ${applicationInfo.applicationName} for repository ${repo.name}`);
+            }
           }
-          
-          console.log(`Total connectors found: ${connectors.length}`);
-          
-          // Create a single entry for this repository with all file paths consolidated
-          const muleApp: MuleApplication = {
-            id: `${repo.repoId}`, // Use repository ID as unique identifier
-            name: repo.name,
-            repository: repo.webUrl || `https://dev.azure.com/${organization}/${repo.project}/_git/${repo.name}`,
-            branch: repo.defaultBranch?.replace('refs/heads/', '') || 'main',
-            applicationName: applicationInfo.applicationName,
-            muleRuntime: applicationInfo.muleRuntime,
-            muleVersion: applicationInfo.muleVersion,
-            javaVersion: applicationInfo.javaVersion,
-            dependencies: applicationInfo.dependencies,
-            connectors,
-            status: 'pending',
-            lastUpdated: new Date().toISOString(),
-            pomPaths: pomFiles, // Include all POM files found
-            artifactJsonPaths: artifactJsonFiles, // Include all artifact JSON files
-            projectXmlPaths: projectXmlFiles // Include all project XML files
-          };
-          
-          // Only add if not already processed (avoid duplicates)
-          if (!muleAppsMap.has(repo.repoId)) {
-            muleAppsMap.set(repo.repoId, muleApp);
-            console.log(`Added unique Mule app: ${applicationInfo.applicationName} for repository ${repo.name}`);
-          }
+        } catch (error) {
+          console.log(`Error processing Azure repo ${repo.name}:`, error);
         }
-      } catch (error) {
-        console.log(`Error processing Azure repo ${repo.name}:`, error);
       }
+      
+      const uniqueMuleApps = Array.from(muleAppsMap.values());
+      console.log(`Total unique Mule applications found in Azure DevOps: ${uniqueMuleApps.length}`);
+      return uniqueMuleApps;
+      
+    } catch (error) {
+      console.error('Azure DevOps scanning failed:', error);
+      throw new Error(`Azure DevOps scanning failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-    
-    const uniqueMuleApps = Array.from(muleAppsMap.values());
-    console.log(`Total unique Mule applications found in Azure DevOps: ${uniqueMuleApps.length}`);
-    return uniqueMuleApps;
   };
 
   const handleScanRepositories = async () => {
