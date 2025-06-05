@@ -1,4 +1,3 @@
-
 import axios from 'axios';
 
 const AZURE_PROXY_BASE = 'http://localhost:3031/api/azure';
@@ -120,14 +119,23 @@ export class AzureDevOpsAPI {
         filePath,
         token: this.token
       });
-      if (response.data && typeof response.data.content === 'string') {
+      
+      if (response.data && response.data.content) {
         console.log(`Successfully fetched content for: ${filePath}`);
         return response.data.content;
       }
+      
       console.log(`No content found for: ${filePath}`);
       return null;
     } catch (error) {
       console.error(`Error fetching file content for ${filePath}:`, error);
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 404) {
+          console.log(`File not found: ${filePath}`);
+        } else if (error.response?.status === 401 || error.response?.status === 403) {
+          console.error('Authentication failed. Please check your Azure DevOps PAT and permissions.');
+        }
+      }
       return null;
     }
   }

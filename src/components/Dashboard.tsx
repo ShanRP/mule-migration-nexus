@@ -81,7 +81,6 @@ const Dashboard = () => {
       github_token: githubToken.trim(),
       repository_type: 'github',
     });
-    toast.success('GitHub token saved!');
     setConnecting(null);
   };
 
@@ -100,7 +99,6 @@ const Dashboard = () => {
       azure_devops_url: azureOrgUrl.trim(),
       repository_type: 'azure_devops',
     });
-    toast.success('Azure DevOps token saved!');
     setConnecting(null);
   };
 
@@ -243,10 +241,10 @@ const Dashboard = () => {
           // Analyze connectors from all XML files
           let connectors: any[] = [];
           const configPaths = [
-            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule/mule-configuration.xml`,
-            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/app/mule-configuration.xml`,
-            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/resources/mule-configuration.xml`,
-            `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/mule-configuration.xml`
+            // `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule/mule-configuration.xml`,
+            // `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/app/mule-configuration.xml`,
+            // `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/resources/mule-configuration.xml`,
+            // `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/mule-configuration.xml`
           ];
           
           for (const configPath of configPaths) {
@@ -430,30 +428,18 @@ const Dashboard = () => {
             console.log(`Processing Mule repository: ${repo.name}`);
             
             let connectors: any[] = [];
-            const configPaths = [
-              `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule/mule-configuration.xml`,
-              `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/app/mule-configuration.xml`,
-              `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/resources/mule-configuration.xml`,
-              `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/mule-configuration.xml`
-            ].filter(path => path !== '/');
             
-            for (const configPath of configPaths) {
-              const configXml = await azureApi.getFileContent(repo.project, repo.repoId, configPath);
-              if (configXml) {
-                connectors = analyzeMuleConfiguration(configXml);
-                console.log(`Found ${connectors.length} connectors in ${configPath}`);
-                break;
-              }
-            }
+            // Look for XML files in the mule directory
+            const muleDirPath = `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule`;
+            const muleFiles = allFiles.filter(f => f.startsWith(muleDirPath) && f.endsWith('.xml'));
+            console.log(`Found ${muleFiles.length} XML files in mule directory`);
             
-            if (connectors.length === 0) {
-              const muleDirPath = `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule`;
-              const muleFiles = allFiles.filter(f => f.startsWith(muleDirPath) && f.endsWith('.xml'));
-              console.log(`Checking ${muleFiles.length} XML files in mule directory`);
-              for (const xmlFile of muleFiles) {
-                const xmlContent = await azureApi.getFileContent(repo.project, repo.repoId, xmlFile);
-                if (xmlContent) {
-                  const fileConnectors = analyzeMuleConfiguration(xmlContent);
+            for (const xmlFile of muleFiles) {
+              const xmlContent = await azureApi.getFileContent(repo.project, repo.repoId, xmlFile);
+              if (xmlContent) {
+                const fileConnectors = analyzeMuleConfiguration(xmlContent);
+                if (fileConnectors.length > 0) {
+                  console.log(`Found ${fileConnectors.length} connectors in ${xmlFile}`);
                   connectors = [...connectors, ...fileConnectors];
                 }
               }
@@ -1056,7 +1042,7 @@ const Dashboard = () => {
                   disabled={connecting === 'github'}
                   className="w-full"
                 >
-                  {connecting === 'github' ? 'Connecting...' : 'Connect GitHub'}
+                  {connecting === 'github' ? 'Connecting...' : selectedOrganization?.github_token ? 'Connected' : 'Connect GitHub'}
                 </Button>
               </div>
             </TabsContent>
@@ -1090,13 +1076,27 @@ const Dashboard = () => {
                   disabled={connecting === 'azure'}
                   className="w-full"
                 >
-                  {connecting === 'azure' ? 'Connecting...' : 'Connect Azure DevOps'}
+                  {connecting === 'azure' ? 'Connecting...' : selectedOrganization?.azure_devops_token ? 'Connected' : 'Connect Azure DevOps'}
                 </Button>
               </div>
             </TabsContent>
           </Tabs>
           
-          {isConnected && (
+          {selectedOrganization?.repository_type === 'github' && selectedOrganization?.github_token && (
+            <div className="mt-6 pt-6 border-t">
+              <Button
+                onClick={handleScanRepositories}
+                disabled={fetchingRepos}
+                className="w-full"
+                variant="outline"
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${fetchingRepos ? 'animate-spin' : ''}`} />
+                {fetchingRepos ? 'Scanning Repositories...' : 'Scan for Mule Applications'}
+              </Button>
+            </div>
+          )}
+          
+          {selectedOrganization?.repository_type === 'azure_devops' && selectedOrganization?.azure_devops_token && (
             <div className="mt-6 pt-6 border-t">
               <Button
                 onClick={handleScanRepositories}

@@ -41,16 +41,18 @@ interface MuleApplication {
 }
 
 const Migration = () => {
-  const { selectedOrganization } = useOrganizations();
+  const { selectedOrganization, updateOrganization } = useOrganizations();
   const [applications, setApplications] = useState<MuleApplication[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fetchingRepos, setFetchingRepos] = useState(false);
   const [migrating, setMigrating] = useState(false);
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [githubToken, setGithubToken] = useState('');
+  const [azureToken, setAzureToken] = useState('');
+  const [azureOrgUrl, setAzureOrgUrl] = useState('');
 
   const repositoryType = selectedOrganization?.repository_type;
-  const githubToken = selectedOrganization?.github_token || '';
-  const azureToken = selectedOrganization?.azure_devops_token || '';
 
   // Reset state when organization changes
   useEffect(() => {
@@ -223,7 +225,28 @@ const Migration = () => {
               continue;
             }
             
-            const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+            let artifactJson = null;
+            let artifactJsonPath = null;
+            for (const ajPath of artifactJsonFiles) {
+              try {
+                console.log(`Fetching mule-artifact.json: ${ajPath}`);
+                const artifactContent = await azureApi.getFileContent(repo.project, repo.id, ajPath);
+                if (artifactContent) {
+                  try {
+                    artifactJson = JSON.parse(artifactContent);
+                    artifactJsonPath = ajPath;
+                    console.log('Successfully parsed artifact.json:', artifactJson);
+                    break;
+                  } catch (e) {
+                    console.error('Error parsing artifact.json:', e);
+                  }
+                }
+              } catch (error) {
+                console.error(`Error fetching artifact.json at ${ajPath}:`, error);
+              }
+            }
+            
+            const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml, artifactJson);
             
             let connectors: any[] = [];
             const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
@@ -249,21 +272,6 @@ const Migration = () => {
                 const xmlContent = await azureApi.getFileContent(repo.project, repo.id, xmlFile);
                 if (xmlContent) {
                   connectors = [...connectors, ...analyzeMuleConfiguration(xmlContent)];
-                }
-              }
-            }
-            
-            let artifactJson = null;
-            let artifactJsonPath = null;
-            for (const ajPath of artifactJsonFiles) {
-              const artifactContent = await azureApi.getFileContent(repo.project, repo.id, ajPath);
-              if (artifactContent) {
-                try {
-                  artifactJson = JSON.parse(artifactContent);
-                  artifactJsonPath = ajPath;
-                  break;
-                } catch (e) {
-                  console.error('Error parsing artifact.json:', e);
                 }
               }
             }
@@ -689,6 +697,43 @@ const Migration = () => {
     }
   };
 
+  const handleConnectGithub = async () => {
+    if (!githubToken.trim()) {
+      toast.error('Please enter a GitHub token');
+      return;
+    }
+    setConnecting('github');
+    try {
+      await updateOrganization(selectedOrganization!.id, {
+        github_token: githubToken.trim(),
+        repository_type: 'github',
+      });
+    } finally {
+      setConnecting(null);
+    }
+  };
+
+  const handleConnectAzure = async () => {
+    if (!azureToken.trim()) {
+      toast.error('Please enter an Azure DevOps token');
+      return;
+    }
+    if (!azureOrgUrl.trim()) {
+      toast.error('Please enter your Azure DevOps organization URL');
+      return;
+    }
+    setConnecting('azure');
+    try {
+      await updateOrganization(selectedOrganization!.id, {
+        azure_devops_token: azureToken.trim(),
+        azure_devops_url: azureOrgUrl.trim(),
+        repository_type: 'azure_devops',
+      });
+    } finally {
+      setConnecting(null);
+    }
+  };
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center mb-6">
@@ -862,6 +907,22 @@ const Migration = () => {
           disabled={!applications.some(app => app.selected) || migrating}
         >
           {migrating ? 'Migrating...' : 'Migrate Selected'}
+        </Button>
+      </div>
+      <div className="flex justify-between mt-4">
+        <Button
+          onClick={handleConnectGithub}
+          disabled={connecting === 'github'}
+          className="w-full"
+        >
+          {connecting === 'github' ? 'Connecting...' : selectedOrganization?.github_token ? 'Connected' : 'Connect GitHub'}
+        </Button>
+        <Button
+          onClick={handleConnectAzure}
+          disabled={connecting === 'azure'}
+          className="w-full"
+        >
+          {connecting === 'azure' ? 'Connecting...' : selectedOrganization?.azure_devops_token ? 'Connected' : 'Connect Azure DevOps'}
         </Button>
       </div>
     </div>

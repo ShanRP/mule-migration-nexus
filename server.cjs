@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
@@ -96,13 +95,26 @@ app.post('/api/azure/fileContent', async (req, res) => {
       { 
         headers: { 
           'Authorization': getAzureAuthHeader(token), 
-          'Accept': 'text/plain'
+          'Accept': 'application/json'
         },
-        timeout: 30000 // 30 second timeout
+        timeout: 30000
       }
     );
-    console.log(`Successfully fetched content for: ${filePath} (${response.data.length} characters)`);
-    res.json({ content: response.data });
+    
+    // Azure DevOps returns the content in base64 format
+    if (response.data && response.data.content) {
+      try {
+        const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
+        console.log(`Successfully decoded content for: ${filePath} (${content.length} characters)`);
+        res.json({ content });
+      } catch (decodeError) {
+        console.error(`Error decoding content for ${filePath}:`, decodeError);
+        res.status(500).json({ error: 'Failed to decode file content' });
+      }
+    } else {
+      console.log(`No content found for: ${filePath}`);
+      res.json({ content: null });
+    }
   } catch (err) {
     console.error(`Error fetching file content for ${filePath}:`, err.response?.data || err.message);
     res.status(err.response?.status || 500).json({ error: err.message });
@@ -184,61 +196,4 @@ app.post('/api/azure/commitFiles', async (req, res) => {
     );
     
     if (!branchResponse.data || !branchResponse.data.value || branchResponse.data.value.length === 0) {
-      console.error(`Branch ${branchName} not found`);
-      return res.json({ success: false, error: 'Branch not found' });
-    }
-    
-    const branchObjectId = branchResponse.data.value[0].objectId;
-    console.log(`Branch ${branchName} commit ID: ${branchObjectId}`);
-    
-    // Validate files have required properties
-    for (const file of files) {
-      if (!file.path || !file.content) {
-        console.error('Invalid file object:', file);
-        return res.status(400).json({ error: 'All files must have path and content properties' });
-      }
-    }
-    
-    const changes = files.map(file => ({
-      changeType: 'edit',
-      item: { path: `/${file.path}` },
-      newContent: { content: file.content, contentType: 'rawtext' }
-    }));
-    
-    const pushPayload = {
-      refUpdates: [{ name: `refs/heads/${branchName}`, oldObjectId: branchObjectId }],
-      commits: [{ comment: message, changes }]
-    };
-    
-    console.log('Push payload prepared with', changes.length, 'changes');
-    
-    const pushResponse = await axios.post(
-      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/pushes?api-version=7.0`,
-      pushPayload,
-      { 
-        headers: { 
-          'Authorization': getAzureAuthHeader(token), 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json' 
-        },
-        timeout: 60000 // 60 second timeout for large commits
-      }
-    );
-    
-    console.log(`Successfully committed ${files.length} files to branch ${branchName}`);
-    console.log('Push response:', pushResponse.data.pushedBy?.displayName || 'Unknown user');
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Commit files error:', err.response?.data || err.message);
-    if (err.response?.data?.message) {
-      console.error('Detailed error message:', err.response.data.message);
-    }
-    res.status(err.response?.status || 500).json({ 
-      error: err.response?.data?.message || err.message,
-      details: err.response?.data
-    });
-  }
-});
-
-const PORT = process.env.PORT || 3031;
-app.listen(PORT, () => console.log(`Azure DevOps proxy listening on port ${PORT}`));
+      console.error(`
