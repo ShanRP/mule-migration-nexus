@@ -13,12 +13,6 @@ import { OrganizationProvider } from "@/providers/OrganizationProvider";
 const AppContent = () => {
   const { user, loading } = useAuth();
 
-  useEffect(() => {
-    // Log authentication state for debugging
-    console.log('AppContent - User:', user);
-    console.log('AppContent - Loading:', loading);
-  }, [user, loading]);
-
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -40,19 +34,17 @@ const AppContent = () => {
     );
   }
 
-  // User is authenticated, redirect to dashboard
   return (
     <OrganizationProvider>
       <div className="min-h-screen bg-gray-50">
         <Header />
         <main className="pt-16">
           <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/" element={<Dashboard />} />
             <Route path="/migration" element={<Migration />} />
             <Route path="/applications" element={<Applications />} />
-            <Route path="/auth" element={<Navigate to="/dashboard" replace />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/auth" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
       </div>

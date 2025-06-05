@@ -14,8 +14,6 @@ interface MuleConnector {
   cloudHub2Alternative?: string;
 }
 
-import MuleSoftExchangeService from '../services/mulesoftExchangeApi';
-
 export const isMuleApplication = (pomXml: string): boolean => {
   console.log('Checking if application is Mule...');
   
@@ -64,26 +62,15 @@ export const isMuleApplication = (pomXml: string): boolean => {
   return isMatch;
 };
 
-export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
+export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
   console.log('Extracting Mule information...');
   console.log('Artifact JSON received:', artifactJson);
 
   // Application name: get the first <name> tag that is a direct child of <project>
-  let applicationName = 'Unknown Application';
+  let applicationName = 'Unknown';
   const nameMatch = pomXml.match(/<project[\s\S]*?<name>(.*?)<\/name>/);
   if (nameMatch && nameMatch[1]) {
     applicationName = nameMatch[1].trim();
-  } else {
-    // Fallback: try to get name from artifactId
-    const artifactIdMatch = pomXml.match(/<artifactId>(.*?)<\/artifactId>/);
-    if (artifactIdMatch && artifactIdMatch[1]) {
-      applicationName = artifactIdMatch[1].trim();
-    }
-  }
-
-  // Ensure applicationName is never undefined or empty
-  if (!applicationName || applicationName.trim() === '') {
-    applicationName = 'Unnamed Mule Application';
   }
 
   // Mule runtime
@@ -170,9 +157,9 @@ export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
   
   console.log(`Final extracted Java version: ${javaVersion}`);
 
-  // Dependencies - extract first, then get latest versions with fallback
+  // Dependencies (as before)
   const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
-  const basicDependencies = depMatches
+  const dependencies = depMatches
     .map(match => {
       const depXml = match[1];
       const groupId = (depXml.match(/<groupId>(.*?)<\/groupId>/) || [])[1] || '';
@@ -185,26 +172,22 @@ export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
       dep.artifactId.includes('mule') ||
       dep.groupId.includes('org.mule') ||
       dep.groupId.includes('com.mulesoft')
-    );
+    )
+    .map(dep => {
+      const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
+      const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
+      const latestVersion = getLatestVersion(dep.groupId, dep.artifactId, dep.version);
+      return {
+        groupId: dep.groupId,
+        artifactId: dep.artifactId,
+        version: dep.version,
+        latestVersion,
+        isDeprecated,
+        replacement
+      };
+    });
 
-  // Get latest versions with fallback - don't let Exchange API failures break the process
-  let dependencies;
-  try {
-    dependencies = await getLatestVersionsForDependencies(basicDependencies);
-  } catch (error) {
-    console.error('Failed to get latest versions, using fallback:', error);
-    // Fallback: create dependencies with current versions as latest
-    dependencies = basicDependencies.map(dep => ({
-      groupId: dep.groupId,
-      artifactId: dep.artifactId,
-      version: dep.version,
-      latestVersion: dep.version, // Use current as latest when API fails
-      isDeprecated: checkIfDeprecated(dep.groupId, dep.artifactId),
-      replacement: getReplacementDependency(dep.groupId, dep.artifactId)
-    }));
-  }
-
-  console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies: dependencies.length });
+  console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies });
   return { applicationName, muleRuntime, muleVersion, javaVersion, dependencies };
 };
 
@@ -338,34 +321,6 @@ const getReplacementDependency = (groupId: string, artifactId: string): string |
   return replacements[artifactId];
 };
 
-// Updated function to disable MuleSoft Exchange API due to CORS issues
-const getLatestVersion = async (groupId: string, artifactId: string, currentVersion: string): Promise<string> => {
-  // Disable MuleSoft Exchange API due to CORS restrictions in browser
-  console.log(`Using fallback version for ${artifactId} due to CORS restrictions`);
-  return latestConnectorVersions[artifactId] || currentVersion;
-};
-
-// Enhanced function to get latest versions for all dependencies with fallback
-export const getLatestVersionsForDependencies = async (dependencies: Array<{groupId: string, artifactId: string, version: string}>) => {
-  console.log('Getting latest versions for dependencies (using fallback due to CORS)...');
-  
-  // Use fallback versions instead of Exchange API to avoid CORS issues
-  return dependencies.map(dep => {
-    const latestVersion = latestConnectorVersions[dep.artifactId] || dep.version;
-    const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
-    const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
-    
-    return {
-      groupId: dep.groupId,
-      artifactId: dep.artifactId,
-      version: dep.version,
-      latestVersion,
-      isDeprecated,
-      replacement
-    };
-  });
-};
-
 const latestConnectorVersions: Record<string, string> = {
   'mule-marketo-connector': '3.0.9',
   'mule-oauth-module': '1.1.21',
@@ -418,6 +373,10 @@ const latestConnectorVersions: Record<string, string> = {
   'mule-twilio-connector': '4.2.9',
   'mule-sockets-connector': '1.2.5',
   'mule-xml-module': '1.4.2',
+};
+
+const getLatestVersion = (groupId: string, artifactId: string, currentVersion: string): string => {
+  return latestConnectorVersions[artifactId] || currentVersion;
 };
 
 const isDeprecatedConnector = (namespace: string): boolean => {

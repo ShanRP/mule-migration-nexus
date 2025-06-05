@@ -2,8 +2,6 @@
 import { createContext, useContext, ReactNode, useEffect, useState } from "react";
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from "@/integrations/supabase/client";
-import { useToast } from "@/hooks/use-toast";
-import { useNavigate } from "react-router-dom";
 
 interface AuthContextType {
   user: User | null;
@@ -33,27 +31,8 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
-  const { toast } = useToast();
 
   useEffect(() => {
-    // Check for auth errors in URL parameters
-    const urlParams = new URLSearchParams(window.location.search);
-    const error = urlParams.get('error');
-    const errorDescription = urlParams.get('error_description');
-    
-    if (error) {
-      console.error('Auth error:', error, errorDescription);
-      toast({
-        title: "Authentication Error",
-        description: errorDescription?.replace(/\+/g, ' ') || "Failed to authenticate with the provider",
-        variant: "destructive"
-      });
-      
-      // Clean up URL by removing error parameters
-      const newUrl = window.location.origin + window.location.pathname;
-      window.history.replaceState({}, document.title, newUrl);
-    }
-
     // Set up auth state listener first
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
@@ -61,14 +40,6 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
         setSession(session);
         setUser(session?.user ?? null);
         setLoading(false);
-        
-        if (event === 'SIGNED_IN' && session) {
-          console.log('User signed in successfully:', session.user);
-        }
-        
-        if (event === 'SIGNED_OUT') {
-          console.log('User signed out');
-        }
       }
     );
 
@@ -80,7 +51,7 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
     });
 
     return () => subscription.unsubscribe();
-  }, [toast]);
+  }, []);
 
   const login = async (provider: 'github' | 'google' | 'azure') => {
     const redirectUrl = `${window.location.origin}/`;
@@ -102,21 +73,12 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: supabaseProvider,
       options: {
-        redirectTo: redirectUrl,
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent',
-        }
+        redirectTo: redirectUrl
       }
     });
 
     if (error) {
       console.error('Login error:', error);
-      toast({
-        title: "Authentication Error",
-        description: error.message || "Failed to authenticate",
-        variant: "destructive"
-      });
       throw error;
     }
   };
@@ -125,11 +87,6 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
     const { error } = await supabase.auth.signOut();
     if (error) {
       console.error('Logout error:', error);
-      toast({
-        title: "Error",
-        description: "Failed to sign out",
-        variant: "destructive"
-      });
       throw error;
     }
   };
