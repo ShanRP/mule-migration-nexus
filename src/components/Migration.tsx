@@ -505,20 +505,32 @@ const Migration = () => {
     return updated;
   };
 
-  // Helper to update mule-artifact.json with latest Java version
+  // Helper to update mule-artifact.json with both minMuleVersion and javaVersion
   const updateArtifactJsonWithLatestJava = (artifactJson: any) => {
     if (!artifactJson) return artifactJson;
-    const latestJava = '17';
-    if (Array.isArray(artifactJson['javaSpecificationVersions'])) {
-      artifactJson['javaSpecificationVersions'][0] = latestJava;
-    } else if (artifactJson['javaversion']) {
-      artifactJson['javaversion'] = latestJava;
-    } else if (artifactJson['javaVersion']) {
-      artifactJson['javaVersion'] = latestJava;
-    } else if (artifactJson['java']) {
-      artifactJson['java'] = latestJava;
+    
+    const latestJava = getLatestJavaVersion();
+    const latestMule = getLatestMuleVersion();
+    const updatedJson = { ...artifactJson };
+    
+    // Update Java version
+    if (Array.isArray(updatedJson['javaSpecificationVersions'])) {
+      updatedJson['javaSpecificationVersions'][0] = latestJava;
+    } else if (updatedJson['javaversion']) {
+      updatedJson['javaversion'] = latestJava;
+    } else if (updatedJson['javaVersion']) {
+      updatedJson['javaVersion'] = latestJava;
+    } else if (updatedJson['java']) {
+      updatedJson['java'] = latestJava;
+    } else {
+      // Add javaSpecificationVersions if it doesn't exist
+      updatedJson['javaSpecificationVersions'] = [latestJava];
     }
-    return artifactJson;
+    
+    // Add/update minMuleVersion
+    updatedJson['minMuleVersion'] = latestMule;
+    
+    return updatedJson;
   };
 
   // Helper to update src/main/*.xml (for demo, just add a migration comment)
