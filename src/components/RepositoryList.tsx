@@ -390,7 +390,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         console.log(`Updating selected artifact JSON files for ${app.name}...`);
         for (const ajPath of app.artifactJsonPaths) {
           let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
-          let ajJson = {};
+          let ajJson: Record<string, any> = {};
           
           if (ajContent && typeof ajContent === 'string') {
             try {

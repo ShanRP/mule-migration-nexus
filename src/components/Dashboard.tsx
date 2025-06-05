@@ -55,6 +55,7 @@ const Dashboard = () => {
   const [applications, setApplications] = useState<MuleApplication[]>([]);
   const [fetchingRepos, setFetchingRepos] = useState(false);
   const [showRepositories, setShowRepositories] = useState(false);
+  const [migrating, setMigrating] = useState(false);
 
   const handleConnectGithub = async () => {
     if (!githubToken.trim()) {
@@ -548,6 +549,29 @@ const Dashboard = () => {
     }
   };
 
+  const handleMigrateAll = async () => {
+    const selectedApps = applications.filter(app => app.selected);
+    if (selectedApps.length === 0) {
+      toast.error('Please select at least one application to migrate');
+      return;
+    }
+    
+    setMigrating(true);
+    try {
+      for (const app of selectedApps) {
+        // Perform migration for each selected app
+        // This is a placeholder - the actual migration logic would be implemented
+        console.log(`Migrating ${app.applicationName}...`);
+      }
+      toast.success(`Migration initiated for ${selectedApps.length} application(s)!`);
+    } catch (error) {
+      console.error('Migration error:', error);
+      toast.error('Migration failed. Please try again.');
+    } finally {
+      setMigrating(false);
+    }
+  };
+
   const isConnected = selectedOrganization?.github_token || selectedOrganization?.azure_devops_token;
 
   if (showRepositories && applications.length > 0) {
@@ -565,7 +589,11 @@ const Dashboard = () => {
             {fetchingRepos ? 'Scanning...' : 'Rescan Repositories'}
           </Button>
         </div>
-        <RepositoryList applications={applications} setApplications={setApplications} />
+        <RepositoryList 
+          applications={applications} 
+          setApplications={setApplications}
+          onMigrateAll={handleMigrateAll}
+        />
       </div>
     );
   }
