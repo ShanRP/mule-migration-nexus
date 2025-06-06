@@ -37,11 +37,17 @@ export class AzureDevOpsAPI {
 
   private async callEdgeFunction(endpoint: string, data: any) {
     try {
+      const requestBody = { 
+        endpoint,
+        ...data, 
+        organization: this.organization, 
+        token: this.token 
+      };
+      
+      console.log('Calling edge function with body:', JSON.stringify(requestBody, null, 2));
+      
       const { data: response, error } = await supabase.functions.invoke('azure-devops', {
-        body: { ...data, organization: this.organization, token: this.token },
-        headers: {
-          'Content-Type': 'application/json',
-        }
+        body: requestBody
       });
 
       if (error) {
@@ -59,7 +65,7 @@ export class AzureDevOpsAPI {
   async getProjects(): Promise<AzureProject[]> {
     try {
       console.log('Fetching Azure DevOps projects via Supabase Edge Function...');
-      const response = await this.callEdgeFunction('/projects', {});
+      const response = await this.callEdgeFunction('projects', {});
       
       if (response && response.value) {
         console.log(`Successfully fetched ${response.value.length} projects`);
@@ -82,7 +88,7 @@ export class AzureDevOpsAPI {
   async getRepositories(projectName: string): Promise<AzureRepository[]> {
     try {
       console.log(`Fetching repositories for project: ${projectName} via Supabase Edge Function...`);
-      const response = await this.callEdgeFunction('/repositories', {
+      const response = await this.callEdgeFunction('repositories', {
         project: projectName
       });
       
@@ -106,7 +112,7 @@ export class AzureDevOpsAPI {
 
   async listFiles(projectName: string, repositoryId: string): Promise<string[]> {
     try {
-      const response = await this.callEdgeFunction('/listFiles', {
+      const response = await this.callEdgeFunction('listFiles', {
         project: projectName,
         repositoryId
       });
@@ -125,7 +131,7 @@ export class AzureDevOpsAPI {
   async getFileContent(projectName: string, repositoryId: string, filePath: string): Promise<string | null> {
     try {
       console.log(`Fetching file content for: ${filePath}`);
-      const response = await this.callEdgeFunction('/fileContent', {
+      const response = await this.callEdgeFunction('fileContent', {
         project: projectName,
         repositoryId,
         filePath
@@ -152,7 +158,7 @@ export class AzureDevOpsAPI {
   async createBranch(projectName: string, repositoryId: string, branchName: string, sourceBranch: string): Promise<boolean> {
     try {
       console.log(`Creating branch ${branchName} from ${sourceBranch}...`);
-      const response = await this.callEdgeFunction('/createBranch', {
+      const response = await this.callEdgeFunction('createBranch', {
         project: projectName,
         repositoryId,
         branchName,
@@ -171,7 +177,7 @@ export class AzureDevOpsAPI {
   async commitFiles(projectName: string, repositoryId: string, branchName: string, files: Array<{path: string, content: string}>, message: string): Promise<boolean> {
     try {
       console.log(`Committing ${files.length} files to branch ${branchName}...`);
-      const response = await this.callEdgeFunction('/commitFiles', {
+      const response = await this.callEdgeFunction('commitFiles', {
         project: projectName,
         repositoryId,
         branchName,

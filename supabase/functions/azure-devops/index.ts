@@ -1,4 +1,3 @@
-
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
@@ -19,25 +18,31 @@ serve(async (req) => {
   }
 
   try {
-    const url = new URL(req.url);
-    const pathname = url.pathname;
     const body = await req.json();
+    const { endpoint, organization, token, ...requestData } = body;
 
-    console.log(`Azure DevOps API request: ${pathname}`, body);
+    console.log(`Azure DevOps API request: ${endpoint}`, { organization, requestData });
 
-    // Route to appropriate handler based on pathname
-    if (pathname.includes('/projects')) {
-      return await handleProjects(body);
-    } else if (pathname.includes('/repositories')) {
-      return await handleRepositories(body);
-    } else if (pathname.includes('/listFiles')) {
-      return await handleListFiles(body);
-    } else if (pathname.includes('/fileContent')) {
-      return await handleFileContent(body);
-    } else if (pathname.includes('/createBranch')) {
-      return await handleCreateBranch(body);
-    } else if (pathname.includes('/commitFiles')) {
-      return await handleCommitFiles(body);
+    if (!organization || !token) {
+      return new Response(JSON.stringify({ error: 'Missing organization or token' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Route to appropriate handler based on endpoint
+    if (endpoint === 'projects') {
+      return await handleProjects({ organization, token });
+    } else if (endpoint === 'repositories') {
+      return await handleRepositories({ organization, token, ...requestData });
+    } else if (endpoint === 'listFiles') {
+      return await handleListFiles({ organization, token, ...requestData });
+    } else if (endpoint === 'fileContent') {
+      return await handleFileContent({ organization, token, ...requestData });
+    } else if (endpoint === 'createBranch') {
+      return await handleCreateBranch({ organization, token, ...requestData });
+    } else if (endpoint === 'commitFiles') {
+      return await handleCommitFiles({ organization, token, ...requestData });
     } else {
       return new Response(JSON.stringify({ error: 'Invalid endpoint' }), {
         status: 404,
