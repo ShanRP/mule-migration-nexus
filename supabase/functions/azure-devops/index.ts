@@ -1,0 +1,451 @@
+
+import "https://deno.land/x/xhr@0.1.0/mod.ts";
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+// Helper to build Azure DevOps auth header
+function getAzureAuthHeader(token: string) {
+  return 'Basic ' + btoa(':' + token);
+}
+
+serve(async (req) => {
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const url = new URL(req.url);
+    const pathname = url.pathname;
+    const body = await req.json();
+
+    console.log(`Azure DevOps API request: ${pathname}`, body);
+
+    // Route to appropriate handler based on pathname
+    if (pathname.includes('/projects')) {
+      return await handleProjects(body);
+    } else if (pathname.includes('/repositories')) {
+      return await handleRepositories(body);
+    } else if (pathname.includes('/listFiles')) {
+      return await handleListFiles(body);
+    } else if (pathname.includes('/fileContent')) {
+      return await handleFileContent(body);
+    } else if (pathname.includes('/createBranch')) {
+      return await handleCreateBranch(body);
+    } else if (pathname.includes('/commitFiles')) {
+      return await handleCommitFiles(body);
+    } else {
+      return new Response(JSON.stringify({ error: 'Invalid endpoint' }), {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+  } catch (error) {
+    console.error('Error in azure-devops function:', error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+});
+
+async function handleProjects(body: any) {
+  const { organization, token } = body;
+  if (!organization || !token) {
+    return new Response(JSON.stringify({ error: 'Missing organization or token' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    console.log(`Fetching projects for organization: ${organization}`);
+    const response = await fetch(
+      `https://dev.azure.com/${organization}/_apis/projects?api-version=7.0`,
+      { 
+        headers: { 
+          'Authorization': getAzureAuthHeader(token), 
+          'Accept': 'application/json' 
+        } 
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Azure DevOps API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log(`Successfully fetched ${data.value?.length || 0} projects`);
+    
+    return new Response(JSON.stringify(data), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    console.error('Error fetching projects:', error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+async function handleRepositories(body: any) {
+  const { organization, project, token } = body;
+  if (!organization || !project || !token) {
+    return new Response(JSON.stringify({ error: 'Missing params' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    console.log(`Fetching repositories for project: ${project}`);
+    const response = await fetch(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories?api-version=7.0`,
+      { 
+        headers: { 
+          'Authorization': getAzureAuthHeader(token), 
+          'Accept': 'application/json' 
+        } 
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Azure DevOps API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log(`Successfully fetched ${data.value?.length || 0} repositories`);
+    
+    return new Response(JSON.stringify(data), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    console.error('Error fetching repositories:', error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+async function handleListFiles(body: any) {
+  const { organization, project, repositoryId, token } = body;
+  if (!organization || !project || !repositoryId || !token) {
+    return new Response(JSON.stringify({ error: 'Missing params' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    console.log(`Listing files for repository: ${repositoryId} in project: ${project}`);
+    const response = await fetch(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?recursionLevel=Full&api-version=7.0`,
+      { 
+        headers: { 
+          'Authorization': getAzureAuthHeader(token), 
+          'Accept': 'application/json' 
+        } 
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Azure DevOps API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    if (data && data.value) {
+      const files = data.value
+        .filter((item: any) => !item.isFolder && item.path && !item.path.includes('/target/'))
+        .map((item: any) => item.path.substring(1)); // Remove leading slash
+      
+      console.log(`Found ${files.length} files (excluding folders and target directories)`);
+      
+      // Log Mule-specific files for debugging
+      const muleFiles = files.filter((file: string) => 
+        file.endsWith('pom.xml') || 
+        file.endsWith('mule-artifact.json') || 
+        (file.endsWith('.xml') && file.includes('src/main/mule/'))
+      );
+      console.log(`Found ${muleFiles.length} Mule-related files:`, muleFiles);
+      
+      return new Response(JSON.stringify({ files }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    } else {
+      console.log('No files found in repository');
+      return new Response(JSON.stringify({ files: [] }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+  } catch (error) {
+    console.error('Error listing files:', error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+async function handleFileContent(body: any) {
+  const { organization, project, repositoryId, filePath, token } = body;
+  if (!organization || !project || !repositoryId || !filePath || !token) {
+    return new Response(JSON.stringify({ error: 'Missing params' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    console.log(`Fetching content for file: ${filePath}`);
+    const response = await fetch(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?path=${encodeURIComponent('/' + filePath)}&api-version=7.0`,
+      { 
+        headers: { 
+          'Authorization': getAzureAuthHeader(token), 
+          'Accept': 'application/json'
+        },
+      }
+    );
+    
+    if (!response.ok) {
+      if (response.status === 404) {
+        console.log(`File not found: ${filePath}`);
+        return new Response(JSON.stringify({ content: null }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Azure DevOps API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    // Azure DevOps returns the content in base64 format
+    if (data && data.content) {
+      try {
+        // Decode base64 content
+        const binaryString = atob(data.content);
+        const content = new TextDecoder().decode(
+          new Uint8Array([...binaryString].map(char => char.charCodeAt(0)))
+        );
+        console.log(`Successfully decoded content for: ${filePath} (${content.length} characters)`);
+        return new Response(JSON.stringify({ content }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      } catch (decodeError) {
+        console.error(`Error decoding content for ${filePath}:`, decodeError);
+        return new Response(JSON.stringify({ error: 'Failed to decode file content' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    } else {
+      console.log(`No content found for: ${filePath}`);
+      return new Response(JSON.stringify({ content: null }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+  } catch (error) {
+    console.error(`Error fetching file content for ${filePath}:`, error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+async function handleCreateBranch(body: any) {
+  const { organization, project, repositoryId, branchName, sourceBranch, token } = body;
+  if (!organization || !project || !repositoryId || !branchName || !sourceBranch || !token) {
+    return new Response(JSON.stringify({ error: 'Missing params' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    console.log(`Creating branch ${branchName} from ${sourceBranch} in repository ${repositoryId}`);
+    
+    // Get the source branch commit first
+    const branchResponse = await fetch(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/refs?filter=heads/${sourceBranch}&api-version=7.0`,
+      { 
+        headers: { 
+          'Authorization': getAzureAuthHeader(token), 
+          'Accept': 'application/json' 
+        } 
+      }
+    );
+    
+    if (!branchResponse.ok) {
+      throw new Error(`Failed to get source branch: ${branchResponse.status}`);
+    }
+
+    const branchData = await branchResponse.json();
+    
+    if (!branchData || !branchData.value || branchData.value.length === 0) {
+      console.error(`Source branch ${sourceBranch} not found`);
+      return new Response(JSON.stringify({ success: false, error: 'Source branch not found' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    
+    const sourceCommitId = branchData.value[0].objectId;
+    console.log(`Source branch commit ID: ${sourceCommitId}`);
+    
+    // Create new branch with correct API format
+    const createBranchPayload = [
+      {
+        name: `refs/heads/${branchName}`,
+        oldObjectId: '0000000000000000000000000000000000000000',
+        newObjectId: sourceCommitId
+      }
+    ];
+    
+    const createResponse = await fetch(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/refs?api-version=7.0`,
+      { 
+        method: 'POST',
+        headers: { 
+          'Authorization': getAzureAuthHeader(token), 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json' 
+        },
+        body: JSON.stringify(createBranchPayload)
+      }
+    );
+    
+    if (!createResponse.ok) {
+      if (createResponse.status === 409) {
+        // Branch already exists
+        console.log(`Branch ${branchName} already exists`);
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Failed to create branch: ${createResponse.status}`);
+    }
+    
+    console.log(`Successfully created branch: ${branchName}`);
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    console.error('Branch creation error:', error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+async function handleCommitFiles(body: any) {
+  const { organization, project, repositoryId, branchName, files, message, token } = body;
+  if (!organization || !project || !repositoryId || !branchName || !files || !message || !token) {
+    return new Response(JSON.stringify({ error: 'Missing params' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+  
+  if (!Array.isArray(files) || files.length === 0) {
+    return new Response(JSON.stringify({ error: 'Files array is empty or invalid' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+  
+  try {
+    console.log(`Committing ${files.length} files to branch ${branchName} in repository ${repositoryId}`);
+    console.log('Files to commit:', files.map((f: any) => f.path));
+    
+    // Get the latest commit on the branch
+    const branchResponse = await fetch(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/refs?filter=heads/${branchName}&api-version=7.0`,
+      { 
+        headers: { 
+          'Authorization': getAzureAuthHeader(token), 
+          'Accept': 'application/json' 
+        } 
+      }
+    );
+    
+    if (!branchResponse.ok) {
+      throw new Error(`Failed to get branch info: ${branchResponse.status}`);
+    }
+
+    const branchData = await branchResponse.json();
+    
+    if (!branchData || !branchData.value || branchData.value.length === 0) {
+      console.error(`Branch ${branchName} not found`);
+      return new Response(JSON.stringify({ success: false, error: 'Branch not found' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    
+    const oldObjectId = branchData.value[0].objectId;
+    console.log(`Current branch commit ID: ${oldObjectId}`);
+    
+    // Prepare changes for commit
+    const changes = files.map((file: any) => ({
+      changeType: 'edit',
+      item: { path: `/${file.path}` },
+      newContent: {
+        content: btoa(file.content), // Base64 encode content
+        contentType: 'base64encoded'
+      }
+    }));
+    
+    const commitPayload = {
+      refUpdates: [
+        {
+          name: `refs/heads/${branchName}`,
+          oldObjectId,
+          newObjectId: '0000000000000000000000000000000000000000'
+        }
+      ],
+      commits: [
+        {
+          comment: message,
+          changes
+        }
+      ]
+    };
+    
+    const commitResponse = await fetch(
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/pushes?api-version=7.0`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': getAzureAuthHeader(token),
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(commitPayload)
+      }
+    );
+    
+    if (!commitResponse.ok) {
+      const errorText = await commitResponse.text();
+      console.error('Commit failed:', errorText);
+      throw new Error(`Failed to commit files: ${commitResponse.status}`);
+    }
+    
+    console.log('Files committed successfully');
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    console.error('Error committing files:', error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+}
