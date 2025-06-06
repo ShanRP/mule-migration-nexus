@@ -431,9 +431,9 @@ async function handleCommitFiles(body: any) {
     const oldObjectId = branchData.value[0].objectId;
     console.log(`Current branch commit ID: ${oldObjectId}`);
     
-    // Prepare changes for commit
+    // Prepare changes for commit - Azure DevOps expects the correct change type
     const changes = files.map((file: any) => ({
-      changeType: 'edit',
+      changeType: 'edit', // Use 'edit' for existing files, 'add' for new files
       item: { path: `/${file.path}` },
       newContent: {
         content: btoa(file.content), // Base64 encode content
@@ -441,21 +441,23 @@ async function handleCommitFiles(body: any) {
       }
     }));
     
+    // Correct payload structure for Azure DevOps pushes API
     const commitPayload = {
       refUpdates: [
         {
           name: `refs/heads/${branchName}`,
-          oldObjectId,
-          newObjectId: '0000000000000000000000000000000000000000'
+          oldObjectId: oldObjectId, // Use the current commit ID instead of zeros
         }
       ],
       commits: [
         {
           comment: message,
-          changes
+          changes: changes
         }
       ]
     };
+    
+    console.log('Commit payload structure:', JSON.stringify(commitPayload, null, 2));
     
     const commitResponse = await fetch(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/pushes?api-version=7.0`,
@@ -473,10 +475,13 @@ async function handleCommitFiles(body: any) {
     if (!commitResponse.ok) {
       const errorText = await commitResponse.text();
       console.error('Commit failed:', errorText);
-      throw new Error(`Failed to commit files: ${commitResponse.status}`);
+      throw new Error(`Failed to commit files: ${commitResponse.status} - ${errorText}`);
     }
     
+    const commitData = await commitResponse.json();
+    console.log('Commit response:', commitData);
     console.log('Files committed successfully');
+    
     return new Response(JSON.stringify({ success: true }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
