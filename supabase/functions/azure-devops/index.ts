@@ -1,3 +1,4 @@
+
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
@@ -19,13 +20,10 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { endpoint, organization, token, ...requestData } = body;
+    const { endpoint, organization, token, migrationRules, ...requestData } = body;
 
     console.log(`Azure DevOps API request: ${endpoint}`, { organization, requestData });
-    
-    // Extract migration rules from the request body at the top level
-    const migrationRules = body.migrationRules || requestData.migrationRules;
-    console.log('CRITICAL: Migration Rules received in edge function (FIXED):', JSON.stringify(migrationRules, null, 2));
+    console.log('CRITICAL: Migration Rules received in edge function:', JSON.stringify(migrationRules, null, 2));
 
     if (!organization || !token) {
       return new Response(JSON.stringify({ error: 'Missing organization or token' }), {
@@ -391,8 +389,8 @@ async function handleCreateBranch(body: any) {
 async function handleCommitFiles(body: any) {
   const { organization, project, repositoryId, branchName, files, message, token, migrationRules } = body;
   
-  console.log('=== AZURE DEVOPS EDGE FUNCTION: COMMIT WITH RULES PRIORITY (FIXED) ===');
-  console.log('CRITICAL: Migration Rules received in edge function (FIXED):', JSON.stringify(migrationRules, null, 2));
+  console.log('=== AZURE DEVOPS EDGE FUNCTION: COMMIT WITH RULES PRIORITY ===');
+  console.log('CRITICAL: Migration Rules received in edge function:', JSON.stringify(migrationRules, null, 2));
   console.log('Files to commit:', files?.length);
   
   if (!organization || !project || !repositoryId || !branchName || !files || !message || !token) {
@@ -412,19 +410,10 @@ async function handleCommitFiles(body: any) {
   }
   
   try {
-    console.log(`=== COMMITTING ${files.length} FILES WITH MIGRATION RULES PRIORITY (FIXED) ===`);
+    console.log(`=== COMMITTING ${files.length} FILES WITH MIGRATION RULES PRIORITY ===`);
     console.log(`Repository: ${repositoryId}, Branch: ${branchName}, Project: ${project}`);
-    
-    if (migrationRules) {
-      console.log('=== CRITICAL: MIGRATION RULES BEING APPLIED (HIGHEST PRIORITY - FIXED) ===');
-      console.log('Java Version (Rules):', migrationRules.javaVersion);
-      console.log('Mule Version (Rules):', migrationRules.muleVersion);
-      console.log('Min Mule Version (Rules):', migrationRules.minMuleVersion);
-      console.log('Dependency Versions (Rules):', migrationRules.dependencyVersions);
-      console.log('Connector Replacements (Rules):', migrationRules.connectorReplacements);
-    } else {
-      console.error('CRITICAL: No migration rules received - FIXED VERSION SHOULD RECEIVE THEM!');
-    }
+    console.log('CRITICAL: Active Migration Rules (ABSOLUTE PRIORITY):', JSON.stringify(migrationRules, null, 2));
+    console.log('Files being committed:', files.map((f: any) => f.path));
     
     // Get the latest commit on the branch
     const branchResponse = await fetch(
@@ -454,40 +443,50 @@ async function handleCommitFiles(body: any) {
     const oldObjectId = branchData.value[0].objectId;
     console.log(`Current branch commit ID: ${oldObjectId}`);
     
-    console.log('Files being committed:', files.map((f: any) => f.path));
-    
-    // Process files with migration rules priority
-    files.forEach((file: any) => {
-      console.log(`Processing file with rules priority: ${file.path}`);
+    // Log migration rules application
+    if (migrationRules) {
+      console.log('=== CRITICAL: MIGRATION RULES BEING APPLIED (HIGHEST PRIORITY) ===');
+      console.log('Java Version (Rules):', migrationRules.javaVersion);
+      console.log('Mule Version (Rules):', migrationRules.muleVersion);
+      console.log('Min Mule Version (Rules):', migrationRules.minMuleVersion);
+      console.log('Dependency Versions (Rules):', migrationRules.dependencyVersions);
+      console.log('Connector Replacements (Rules):', migrationRules.connectorReplacements);
       
-      // If it's a POM file, log dependency rule applications
-      if (file.path.endsWith('pom.xml') && migrationRules?.dependencyVersions?.length > 0) {
-        console.log(`POM file ${file.path} - applying dependency rules:`, migrationRules.dependencyVersions);
-      }
-      
-      // If it's an artifact JSON file, log runtime rule applications
-      if (file.path.endsWith('mule-artifact.json') && migrationRules) {
-        console.log(`CRITICAL: Artifact JSON file ${file.path} - applying runtime rules:`);
-        console.log(`- Java Version Rule: ${migrationRules.javaVersion}`);
-        console.log(`- Min Mule Version Rule: ${migrationRules.minMuleVersion}`);
+      // Process files with migration rules priority
+      files.forEach((file: any) => {
+        console.log(`Processing file with rules priority: ${file.path}`);
         
-        // Parse and log the actual content being committed
-        try {
-          const content = JSON.parse(file.content);
-          console.log(`CRITICAL: Artifact JSON content being committed:`, JSON.stringify(content, null, 2));
-          if (content.javaSpecificationVersions) {
-            console.log(`CRITICAL: Java version in artifact: ${content.javaSpecificationVersions[0]}`);
-          }
-        } catch (e) {
-          console.error('Failed to parse artifact JSON content:', e);
+        // If it's a POM file, log dependency rule applications
+        if (file.path.endsWith('pom.xml') && migrationRules.dependencyVersions?.length > 0) {
+          console.log(`POM file ${file.path} - applying dependency rules:`, migrationRules.dependencyVersions);
         }
-      }
-      
-      // If it's an XML file, log connector rule applications
-      if (file.path.endsWith('.xml') && file.path.includes('src/main/mule/') && migrationRules?.connectorReplacements?.length > 0) {
-        console.log(`Mule XML file ${file.path} - applying connector rules:`, migrationRules.connectorReplacements);
-      }
-    });
+        
+        // If it's an artifact JSON file, log runtime rule applications
+        if (file.path.endsWith('mule-artifact.json')) {
+          console.log(`CRITICAL: Artifact JSON file ${file.path} - applying runtime rules:`);
+          console.log(`- Java Version Rule: ${migrationRules.javaVersion}`);
+          console.log(`- Min Mule Version Rule: ${migrationRules.minMuleVersion}`);
+          
+          // Parse and log the actual content being committed
+          try {
+            const content = JSON.parse(file.content);
+            console.log(`CRITICAL: Artifact JSON content being committed:`, JSON.stringify(content, null, 2));
+            if (content.javaSpecificationVersions) {
+              console.log(`CRITICAL: Java version in artifact: ${content.javaSpecificationVersions[0]}`);
+            }
+          } catch (e) {
+            console.error('Failed to parse artifact JSON content:', e);
+          }
+        }
+        
+        // If it's an XML file, log connector rule applications
+        if (file.path.endsWith('.xml') && file.path.includes('src/main/mule/') && migrationRules.connectorReplacements?.length > 0) {
+          console.log(`Mule XML file ${file.path} - applying connector rules:`, migrationRules.connectorReplacements);
+        }
+      });
+    } else {
+      console.error('CRITICAL: No migration rules received - this is the problem!');
+    }
     
     // Prepare changes for commit - Azure DevOps expects the correct change type
     const changes = files.map((file: any) => {
@@ -547,9 +546,9 @@ async function handleCommitFiles(body: any) {
     }
     
     const commitData = await commitResponse.json();
-    console.log('=== COMMIT SUCCESSFUL WITH MIGRATION RULES PRIORITY (FIXED) ===');
+    console.log('=== COMMIT SUCCESSFUL WITH MIGRATION RULES PRIORITY ===');
     console.log('Commit response:', commitData);
-    console.log('CRITICAL: Migration rules were successfully applied with highest priority (FIXED)');
+    console.log('CRITICAL: Migration rules were successfully applied with highest priority');
     
     return new Response(JSON.stringify({ 
       success: true, 
