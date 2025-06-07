@@ -128,23 +128,23 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     ));
   };
 
-  // PRIORITY SYSTEM: Rules ALWAYS take precedence over defaults
+  // CRITICAL FIX: Rules-based version functions with proper fallback
   const getRuleBasedJavaVersion = () => {
-    const version = migrationRules.javaVersion || getLatestJavaVersion();
-    console.log(`Java Version Priority Check - Rules: ${migrationRules.javaVersion}, Using: ${version}`);
-    return version;
+    const version = migrationRules.javaVersion;
+    console.log(`CRITICAL: Java Version from Rules: "${version}"`);
+    return version; // Don't fallback to default - use rules value directly
   };
 
   const getRuleBasedMuleVersion = () => {
-    const version = migrationRules.muleVersion || getLatestMuleVersion();
-    console.log(`Mule Version Priority Check - Rules: ${migrationRules.muleVersion}, Using: ${version}`);
-    return version;
+    const version = migrationRules.muleVersion;
+    console.log(`CRITICAL: Mule Version from Rules: "${version}"`);
+    return version; // Don't fallback to default - use rules value directly
   };
 
   const getRuleBasedMinMuleVersion = () => {
-    const version = migrationRules.minMuleVersion || getLatestMuleVersion();
-    console.log(`Min Mule Version Priority Check - Rules: ${migrationRules.minMuleVersion}, Using: ${version}`);
-    return version;
+    const version = migrationRules.minMuleVersion;
+    console.log(`CRITICAL: Min Mule Version from Rules: "${version}"`);
+    return version; // Don't fallback to default - use rules value directly
   };
   
   const getRuleBasedDependencyVersion = (artifactId: string, defaultVersion: string) => {
@@ -172,7 +172,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     
     // Update app.runtime version if selected - RULES FIRST
     if (selections.muleRuntime) {
-      const ruleBasedMuleVersion = rules.muleVersion || getLatestMuleVersion();
+      const ruleBasedMuleVersion = rules.muleVersion;
       console.log(`RULES PRIORITY: Setting app.runtime to ${ruleBasedMuleVersion}`);
       updatedPom = updatedPom.replace(
         /<app\.runtime>.*?<\/app\.runtime>/g,
@@ -367,7 +367,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       }
     }
     
-    // Update artifact JSON files if javaVersion or minMuleVersion are selected - RULES PRIORITY
+    // CRITICAL FIX: Update artifact JSON files with rules-based Java version
     if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
       for (const ajPath of app.artifactJsonPaths) {
         try {
@@ -381,13 +381,13 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           const updatedAj = { ...ajJson };
           
           if (selections.javaVersion) {
-            const ruleBasedJavaVersion = rules.javaVersion || getLatestJavaVersion();
+            const ruleBasedJavaVersion = rules.javaVersion; // Use rules directly, no fallback
             console.log(`ABSOLUTE PRIORITY: Setting Java version to ${ruleBasedJavaVersion} (from rules)`);
             updatedAj.javaSpecificationVersions = [ruleBasedJavaVersion];
           }
           
           if (selections.minMuleVersion) {
-            const ruleBasedMinMuleVersion = rules.minMuleVersion || getLatestMuleVersion();
+            const ruleBasedMinMuleVersion = rules.minMuleVersion; // Use rules directly, no fallback
             console.log(`ABSOLUTE PRIORITY: Setting min Mule version to ${ruleBasedMinMuleVersion} (from rules)`);
             updatedAj.minMuleVersion = ruleBasedMinMuleVersion;
           }
@@ -443,7 +443,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     try {
       console.log('=== AZURE DEVOPS MIGRATION: APPLYING RULES WITH ABSOLUTE PRIORITY ===');
       console.log('Application:', app.applicationName);
-      console.log('Migration Rules (ABSOLUTE PRIORITY):', rules);
+      console.log('Migration Rules (ABSOLUTE PRIORITY):', JSON.stringify(rules, null, 2));
       console.log('Selected Migration Items:', selections);
       
       const urlParts = app.repository.split('/');
@@ -471,7 +471,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         }
       }
       
-      // Update artifact JSON files if selected - RULES PRIORITY
+      // CRITICAL FIX: Update artifact JSON files with rules-based versions
       if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
         for (const ajPath of app.artifactJsonPaths) {
           let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
@@ -489,13 +489,13 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           const updatedAj = { ...ajJson };
           
           if (selections.javaVersion) {
-            const ruleBasedJavaVersion = rules.javaVersion || getLatestJavaVersion();
+            const ruleBasedJavaVersion = rules.javaVersion; // Use rules directly, no fallback
             console.log(`ABSOLUTE PRIORITY: Setting Java version to ${ruleBasedJavaVersion} (from rules)`);
             updatedAj.javaSpecificationVersions = [ruleBasedJavaVersion];
           }
           
           if (selections.minMuleVersion) {
-            const ruleBasedMinMuleVersion = rules.minMuleVersion || getLatestMuleVersion();
+            const ruleBasedMinMuleVersion = rules.minMuleVersion; // Use rules directly, no fallback
             console.log(`ABSOLUTE PRIORITY: Setting min Mule version to ${ruleBasedMinMuleVersion} (from rules)`);
             updatedAj.minMuleVersion = ruleBasedMinMuleVersion;
           }
@@ -515,10 +515,10 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         }
       }
       
-      // Commit all changes with rules data
+      // CRITICAL: Commit all changes with rules data - ensuring rules are passed
       if (filesToCommit.length > 0) {
-        console.log('=== SENDING MIGRATION RULES TO AZURE DEVOPS EDGE FUNCTION ===');
-        console.log('Migration Rules being sent:', rules);
+        console.log('=== CRITICAL: SENDING MIGRATION RULES TO AZURE DEVOPS EDGE FUNCTION ===');
+        console.log('Migration Rules being sent:', JSON.stringify(rules, null, 2));
         console.log('Files to commit:', filesToCommit.length);
         
         const committed = await azureApi.commitFiles(
@@ -527,7 +527,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           'mulemigration',
           filesToCommit,
           'Mule migration: update with RULES PRIORITY',
-          rules  // Pass rules to the API
+          rules  // CRITICAL: Ensure rules are passed
         );
         if (!committed) {
           throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
@@ -551,7 +551,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       console.log('=== STARTING SELECTIVE MIGRATION WITH RULES ABSOLUTE PRIORITY ===');
       console.log('Application:', app.applicationName);
       console.log('Migration selections:', selections);
-      console.log('Migration rules (ABSOLUTE PRIORITY):', rules);
+      console.log('Migration rules (ABSOLUTE PRIORITY):', JSON.stringify(rules, null, 2));
       
       if (repositoryType === 'github') {
         await migrateGitHubApplication(app, selections, rules);
@@ -619,9 +619,9 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   const getTotalUpdateCount = (app: MuleApplication) => {
     let count = 0;
     
-    // Check for runtime updates
-    if (app.muleRuntime !== getLatestMuleVersion()) count++;
-    if (app.javaVersion !== getLatestJavaVersion()) count++;
+    // CRITICAL FIX: Check for runtime updates using rules-based versions
+    if (app.muleRuntime !== getRuleBasedMuleVersion()) count++;
+    if (app.javaVersion !== getRuleBasedJavaVersion()) count++;
     
     // Check for dependency updates
     count += app.dependencies.filter(dep => dep.version !== dep.latestVersion).length;
@@ -636,12 +636,13 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   const getUpdateSummary = (app: MuleApplication) => {
     const updates = [];
     
-    if (app.muleRuntime !== getLatestMuleVersion()) {
-      updates.push(`Mule Runtime: ${app.muleRuntime} → ${getLatestMuleVersion()}`);
+    // CRITICAL FIX: Use rules-based versions for update summary
+    if (app.muleRuntime !== getRuleBasedMuleVersion()) {
+      updates.push(`Mule Runtime: ${app.muleRuntime} → ${getRuleBasedMuleVersion()}`);
     }
     
-    if (app.javaVersion !== getLatestJavaVersion()) {
-      updates.push(`Java: ${app.javaVersion} → ${getLatestJavaVersion()}`);
+    if (app.javaVersion !== getRuleBasedJavaVersion()) {
+      updates.push(`Java: ${app.javaVersion} → ${getRuleBasedJavaVersion()}`);
     }
     
     const depUpdates = app.dependencies.filter(dep => dep.version !== dep.latestVersion).length;
@@ -767,14 +768,14 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
                     </TableCell>
                     <TableCell className="border border-gray-300">
                       <div className="space-y-1 text-sm">
-                        {app.muleRuntime !== getLatestMuleVersion() && (
+                        {app.muleRuntime !== getRuleBasedMuleVersion() && (
                           <Badge variant="outline" className="text-yellow-600 text-xs">
-                            Mule → {getLatestMuleVersion()}
+                            Mule → {getRuleBasedMuleVersion()}
                           </Badge>
                         )}
-                        {app.javaVersion !== getLatestJavaVersion() && (
+                        {app.javaVersion !== getRuleBasedJavaVersion() && (
                           <Badge variant="outline" className="text-yellow-600 text-xs">
-                            Java → {getLatestJavaVersion()}
+                            Java → {getRuleBasedJavaVersion()}
                           </Badge>
                         )}
                         {getTotalUpdateCount(app) > 0 && (

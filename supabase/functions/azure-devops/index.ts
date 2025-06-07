@@ -20,9 +20,10 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { endpoint, organization, token, ...requestData } = body;
+    const { endpoint, organization, token, migrationRules, ...requestData } = body;
 
     console.log(`Azure DevOps API request: ${endpoint}`, { organization, requestData });
+    console.log('CRITICAL: Migration Rules received in edge function:', JSON.stringify(migrationRules, null, 2));
 
     if (!organization || !token) {
       return new Response(JSON.stringify({ error: 'Missing organization or token' }), {
@@ -43,7 +44,7 @@ serve(async (req) => {
     } else if (endpoint === 'createBranch') {
       return await handleCreateBranch({ organization, token, ...requestData });
     } else if (endpoint === 'commitFiles') {
-      return await handleCommitFiles({ organization, token, ...requestData });
+      return await handleCommitFiles({ organization, token, migrationRules, ...requestData });
     } else {
       return new Response(JSON.stringify({ error: 'Invalid endpoint' }), {
         status: 404,
@@ -389,7 +390,7 @@ async function handleCommitFiles(body: any) {
   const { organization, project, repositoryId, branchName, files, message, token, migrationRules } = body;
   
   console.log('=== AZURE DEVOPS EDGE FUNCTION: COMMIT WITH RULES PRIORITY ===');
-  console.log('Migration Rules received in edge function:', migrationRules);
+  console.log('CRITICAL: Migration Rules received in edge function:', JSON.stringify(migrationRules, null, 2));
   console.log('Files to commit:', files?.length);
   
   if (!organization || !project || !repositoryId || !branchName || !files || !message || !token) {
@@ -411,7 +412,7 @@ async function handleCommitFiles(body: any) {
   try {
     console.log(`=== COMMITTING ${files.length} FILES WITH MIGRATION RULES PRIORITY ===`);
     console.log(`Repository: ${repositoryId}, Branch: ${branchName}, Project: ${project}`);
-    console.log('Active Migration Rules (ABSOLUTE PRIORITY):', migrationRules);
+    console.log('CRITICAL: Active Migration Rules (ABSOLUTE PRIORITY):', JSON.stringify(migrationRules, null, 2));
     console.log('Files being committed:', files.map((f: any) => f.path));
     
     // Get the latest commit on the branch
@@ -444,7 +445,7 @@ async function handleCommitFiles(body: any) {
     
     // Log migration rules application
     if (migrationRules) {
-      console.log('=== MIGRATION RULES BEING APPLIED (HIGHEST PRIORITY) ===');
+      console.log('=== CRITICAL: MIGRATION RULES BEING APPLIED (HIGHEST PRIORITY) ===');
       console.log('Java Version (Rules):', migrationRules.javaVersion);
       console.log('Mule Version (Rules):', migrationRules.muleVersion);
       console.log('Min Mule Version (Rules):', migrationRules.minMuleVersion);
@@ -462,9 +463,20 @@ async function handleCommitFiles(body: any) {
         
         // If it's an artifact JSON file, log runtime rule applications
         if (file.path.endsWith('mule-artifact.json')) {
-          console.log(`Artifact JSON file ${file.path} - applying runtime rules:`);
+          console.log(`CRITICAL: Artifact JSON file ${file.path} - applying runtime rules:`);
           console.log(`- Java Version Rule: ${migrationRules.javaVersion}`);
           console.log(`- Min Mule Version Rule: ${migrationRules.minMuleVersion}`);
+          
+          // Parse and log the actual content being committed
+          try {
+            const content = JSON.parse(file.content);
+            console.log(`CRITICAL: Artifact JSON content being committed:`, JSON.stringify(content, null, 2));
+            if (content.javaSpecificationVersions) {
+              console.log(`CRITICAL: Java version in artifact: ${content.javaSpecificationVersions[0]}`);
+            }
+          } catch (e) {
+            console.error('Failed to parse artifact JSON content:', e);
+          }
         }
         
         // If it's an XML file, log connector rule applications
@@ -473,7 +485,7 @@ async function handleCommitFiles(body: any) {
         }
       });
     } else {
-      console.warn('No migration rules received - using default migration behavior');
+      console.error('CRITICAL: No migration rules received - this is the problem!');
     }
     
     // Prepare changes for commit - Azure DevOps expects the correct change type
@@ -536,7 +548,7 @@ async function handleCommitFiles(body: any) {
     const commitData = await commitResponse.json();
     console.log('=== COMMIT SUCCESSFUL WITH MIGRATION RULES PRIORITY ===');
     console.log('Commit response:', commitData);
-    console.log('Migration rules were successfully applied with highest priority');
+    console.log('CRITICAL: Migration rules were successfully applied with highest priority');
     
     return new Response(JSON.stringify({ 
       success: true, 

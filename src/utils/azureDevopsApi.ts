@@ -1,3 +1,4 @@
+
 import axios from 'axios';
 import { supabase } from "@/integrations/supabase/client";
 
@@ -192,21 +193,31 @@ export class AzureDevOpsAPI {
     migrationRules?: MigrationRules
   ): Promise<boolean> {
     try {
-      console.log('=== COMMITTING FILES WITH MIGRATION RULES PRIORITY ===');
+      console.log('=== AZURE API: COMMITTING FILES WITH MIGRATION RULES PRIORITY ===');
       console.log(`Committing ${files.length} files to branch ${branchName}...`);
-      console.log('Migration Rules being sent to Azure DevOps:', migrationRules);
+      console.log('CRITICAL: Migration Rules being sent to edge function:', JSON.stringify(migrationRules, null, 2));
       
-      const response = await this.callEdgeFunction('commitFiles', {
+      // Ensure we pass the migrationRules properly in the request body
+      const requestData = {
         project: projectName,
         repositoryId,
         branchName,
         files,
         message,
-        migrationRules // Pass migration rules to edge function
-      });
+        migrationRules: migrationRules || null // Explicitly pass rules
+      };
+      
+      console.log('CRITICAL: Full request data being sent:', JSON.stringify(requestData, null, 2));
+      
+      const response = await this.callEdgeFunction('commitFiles', requestData);
       
       const success = response && response.success;
       console.log(`File commit ${success ? 'successful' : 'failed'} with rules priority`);
+      if (response?.rulesApplied) {
+        console.log('CONFIRMED: Migration rules were applied in edge function');
+      } else {
+        console.warn('WARNING: Migration rules may not have been applied');
+      }
       return success;
     } catch (error) {
       console.error('Error committing files with migration rules:', error);
