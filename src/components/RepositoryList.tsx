@@ -690,7 +690,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
                 className="bg-red-600 hover:bg-red-700"
               >
                 <RefreshCw className="h-4 w-4 mr-2" />
-                {migrating ? 'Migrating with Rules Priority...' : `Migrate All (${selectedCount}) - Rules Priority`}
+                {migrating ? 'Migrating...' : `Migrate All (${selectedCount})`}
               </Button>
             </div>
           </CardTitle>
