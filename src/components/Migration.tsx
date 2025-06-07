@@ -1,16 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Github, RefreshCw, GitBranch, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
+import { Loader2, RefreshCw, AlertTriangle, CheckCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import axios from 'axios';
 import { useOrganizations } from '@/providers/OrganizationProvider';
-import { isMuleApplication, extractMuleInfo, analyzeMuleConfiguration, getLatestMuleVersion, getLatestJavaVersion, extractAzureOrganization } from '@/utils/muleDetection';
+import RepositoryList from './RepositoryList';
 import { createAzureDevOpsAPI } from '@/utils/azureDevopsApi';
+import { getLatestMuleVersion, getLatestJavaVersion, analyzeMuleProject } from '@/utils/muleDetection';
+import axios from 'axios';
 
 interface MuleDependency {
   groupId: string;
@@ -58,24 +56,25 @@ interface MigrationRules {
   dependencyVersions: { artifactId: string; version: string; }[];
 }
 
-const Migration = () => {
-  const { selectedOrganization, updateOrganization } = useOrganizations();
+interface MigrationSelections {
+  muleRuntime: boolean;
+  javaVersion: boolean;
+  minMuleVersion: boolean;
+  dependencies: string[];
+  connectors: string[];
+}
+
+const Migration: React.FC = () => {
+  const { selectedOrganization } = useOrganizations();
+  const [repositories, setRepositories] = useState<Repository[]>([]);
   const [applications, setApplications] = useState<MuleApplication[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [fetchingRepos, setFetchingRepos] = useState(false);
-  const [migrating, setMigrating] = useState(false);
-  const [connecting, setConnecting] = useState<string | null>(null);
-  const [githubToken, setGithubToken] = useState('');
-  const [azureToken, setAzureToken] = useState('');
-  const [azureOrgUrl, setAzureOrgUrl] = useState('');
-
-  const repositoryType = selectedOrganization?.repository_type;
+  const [discovering, setDiscovering] = useState(false);
 
   // Reset state when organization changes
   useEffect(() => {
+    setRepositories([]);
     setApplications([]);
-    setError(null);
   }, [selectedOrganization?.id]);
 
   // GitHub file operations
@@ -310,7 +309,7 @@ const Migration = () => {
               applicationName,
               pomPaths: pomFiles,
               artifactJsonPaths: artifactJsonFiles,
-              projectXmlPaths: projectXmlFiles,
+              projectXmlPaths: projectXmlPaths,
             });
           }
         } catch (error) {
@@ -468,44 +467,44 @@ const Migration = () => {
   };
 
   // Fetch all repos and scan for Mule apps
-  const handleFetchRepositories = async () => {
-    if (!repositoryType || (!githubToken && !azureToken)) {
+  const discoverRepositories = async () => {
+    if (!selectedOrganization?.repository_type) {
       toast.error('Please connect to a source control provider in the Dashboard.');
       return;
     }
 
     // Validate repository type matches the available token
-    if (repositoryType === 'github' && !githubToken) {
+    if (selectedOrganization?.repository_type === 'github' && !selectedOrganization?.github_token) {
       toast.error('GitHub token not found. Please connect GitHub in the Dashboard.');
       return;
     }
-    if (repositoryType === 'azure_devops' && !azureToken) {
+    if (selectedOrganization?.repository_type === 'azure_devops' && !selectedOrganization?.azure_devops_token) {
       toast.error('Azure DevOps token not found. Please connect Azure DevOps in the Dashboard.');
       return;
     }
 
-    setFetchingRepos(true);
+    setDiscovering(true);
     setError(null);
-    setApplications([]);
+    setRepositories([]);
 
     try {
       let muleApps: any[] = [];
       
-      if (repositoryType === 'github' && githubToken) {
+      if (selectedOrganization?.repository_type === 'github' && selectedOrganization?.github_token) {
         // console.log('Scanning GitHub repositories...');
         const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
-        muleApps = await scanGitHubRepositories(githubToken, orgName);
-      } else if (repositoryType === 'azure_devops' && azureToken) {
+        muleApps = await scanGitHubRepositories(selectedOrganization?.github_token, orgName);
+      } else if (selectedOrganization?.repository_type === 'azure_devops' && selectedOrganization?.azure_devops_token) {
         // console.log('Scanning Azure DevOps repositories...');
         const organization = extractAzureOrganization(selectedOrganization?.azure_devops_url || '');
         if (!organization) {
           toast.error('Please provide a valid Azure DevOps organization URL');
           return;
         }
-        muleApps = await scanAzureRepositories(azureToken, organization);
+        muleApps = await scanAzureRepositories(selectedOrganization?.azure_devops_token, organization);
       }
 
-      setApplications(muleApps);
+      setRepositories(muleApps);
       if (muleApps.length > 0) {
         toast.success(`Found ${muleApps.length} Mule application(s)!`);
       } else {
@@ -515,7 +514,7 @@ const Migration = () => {
       setError('Failed to fetch repositories');
       toast.error('Failed to fetch repositories. Please check your token and permissions.');
     } finally {
-      setFetchingRepos(false);
+      setDiscovering(false);
     }
   };
 
@@ -528,438 +527,508 @@ const Migration = () => {
 
   const normalizePath = (path: string) => path.replace(/^\/+/, '');
 
-  const handleMigrateSelected = async (rules: MigrationRules) => {
+  const handleMigrateAll = async (rules: MigrationRules) => {
+    console.log('=== MIGRATE ALL: APPLYING RULES WITH ABSOLUTE PRIORITY ===');
+    console.log('Migration Rules (ABSOLUTE PRIORITY):', rules);
+    
     const selectedApps = applications.filter(app => app.selected);
     if (selectedApps.length === 0) {
       toast.error('Please select at least one application to migrate');
       return;
     }
-    setMigrating(true);
+
+    setLoading(true);
     try {
+      const repositoryType = selectedOrganization?.repository_type;
+      const githubToken = selectedOrganization?.github_token || '';
+      const azureToken = selectedOrganization?.azure_devops_token || '';
+
       for (const app of selectedApps) {
-        if (repositoryType === 'github') {
-          const repoPath = app.repository.replace('https://github.com/', '');
-          // 1. Get base branch SHA
-          const branchRes = await axios.get(
-            `https://api.github.com/repos/${repoPath}/git/refs/heads/${app.branch}`,
-            { headers: { Authorization: `token ${githubToken}` } }
-          );
-          const baseSha = branchRes.data.object.sha;
-          const newBranch = 'mulemigration';
-          // 2. Create branch (ignore if exists)
-          try {
-            await axios.post(
-              `https://api.github.com/repos/${repoPath}/git/refs`,
-              {
-                ref: `refs/heads/${newBranch}`,
-                sha: baseSha
-              },
-              { headers: { Authorization: `token ${githubToken}` } }
-            );
-          } catch (e) {/* branch may already exist */}
-
-          // 3. Update files with rules priority
-          const filesToCommit = [];
-
-          // Update POM files
-          if (app.pomPaths) {
-            for (const pomPath of app.pomPaths) {
-              const pomContent = await fetchGitHubFileContent(repoPath, pomPath, githubToken);
-              if (pomContent) {
-                const updatedPom = updatePomXmlWithLatestVersions(pomContent, app.dependencies, rules);
-                filesToCommit.push({ path: pomPath, content: updatedPom });
-              }
-            }
-          }
-
-          // Update artifact JSON files
-          if (app.artifactJsonPaths) {
-            for (const ajPath of app.artifactJsonPaths) {
-              const ajContent = await fetchGitHubFileContent(repoPath, ajPath, githubToken);
-              if (ajContent) {
-                const updatedAj = updateArtifactJsonWithLatestJava(JSON.parse(ajContent), rules);
-                filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
-              }
-            }
-          }
-
-          // Update project XML files
-          if (app.projectXmlPaths) {
-            for (const xmlPath of app.projectXmlPaths) {
-              const xmlContent = await fetchGitHubFileContent(repoPath, xmlPath, githubToken);
-              if (xmlContent) {
-                const updatedXml = updateProjectXml(xmlContent, rules);
-                filesToCommit.push({ path: xmlPath, content: updatedXml });
-              }
-            }
-          }
-
-          // 4. Commit all changes
-          for (const file of filesToCommit) {
-            const fileRes = await axios.get(
-              `https://api.github.com/repos/${repoPath}/contents/${file.path}?ref=${app.branch}`,
-              { headers: { Authorization: `token ${githubToken}` } }
-            );
-            const fileSha = fileRes.data.sha;
-
-            await axios.put(
-              `https://api.github.com/repos/${repoPath}/contents/${file.path}`,
-              {
-                message: `Mule migration: update ${file.path} for CloudHub 2.0 with rules priority`,
-                content: btoa(file.content),
-                branch: newBranch,
-                sha: fileSha
-              },
-              { headers: { Authorization: `token ${githubToken}` } }
-            );
-          }
-
+        try {
           // Update application status
           setApplications(prev => prev.map(a => 
             a.id === app.id 
-              ? { ...a, status: 'completed', lastUpdated: new Date().toISOString() }
+              ? { ...a, status: 'in_progress' as const, lastUpdated: new Date().toISOString() }
               : a
           ));
 
-        } else if (repositoryType === 'azure_devops') {
-          const urlParts = app.repository.split('/');
-          const organization = urlParts[3];
-          const project = urlParts[4];
-          const repoId = app.id;
-          const azureApi = createAzureDevOpsAPI(organization, azureToken);
+          // Create default selections (all items selected)
+          const selections: MigrationSelections = {
+            muleRuntime: true,
+            javaVersion: true,
+            minMuleVersion: true,
+            dependencies: app.dependencies.map(dep => dep.artifactId),
+            connectors: app.connectors.map(conn => conn.name)
+          };
 
-          // Create migration branch
-          const branchCreated = await azureApi.createBranch(project, repoId, 'mulemigration', app.branch);
-          if (!branchCreated) {
-            throw new Error('Failed to create migration branch');
+          if (repositoryType === 'github') {
+            await migrateGitHubApplication(app, selections, rules, githubToken);
+          } else if (repositoryType === 'azure_devops') {
+            await migrateAzureApplication(app, selections, rules, azureToken);
           }
 
-          const filesToCommit = [];
-
-          // Update POM files
-          if (app.pomPaths) {
-            for (const pomPath of app.pomPaths) {
-              const pomContent = await azureApi.getFileContent(project, repoId, pomPath);
-              if (pomContent) {
-                const updatedPom = updatePomXmlWithLatestVersions(pomContent, app.dependencies, rules);
-                filesToCommit.push({ path: pomPath, content: updatedPom });
-              }
-            }
-          }
-
-          // Update artifact JSON files
-          if (app.artifactJsonPaths) {
-            for (const ajPath of app.artifactJsonPaths) {
-              const ajContent = await azureApi.getFileContent(project, repoId, ajPath);
-              if (ajContent) {
-                const updatedAj = updateArtifactJsonWithLatestJava(JSON.parse(ajContent), rules);
-                filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
-              }
-            }
-          }
-
-          // Update project XML files
-          if (app.projectXmlPaths) {
-            for (const xmlPath of app.projectXmlPaths) {
-              const xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
-              if (xmlContent) {
-                const updatedXml = updateProjectXml(xmlContent, rules);
-                filesToCommit.push({ path: xmlPath, content: updatedXml });
-              }
-            }
-          }
-
-          // Commit all changes
-          if (filesToCommit.length > 0) {
-            const committed = await azureApi.commitFiles(
-              project,
-              repoId,
-              'mulemigration',
-              filesToCommit,
-              'Mule migration: update files for CloudHub 2.0 with rules priority'
-            );
-            if (!committed) {
-              throw new Error('Failed to commit migration changes');
-            }
-          }
-
-          // Update application status
+          // Update application status to completed
           setApplications(prev => prev.map(a => 
             a.id === app.id 
-              ? { ...a, status: 'completed', lastUpdated: new Date().toISOString() }
+              ? { ...a, status: 'completed' as const, lastUpdated: new Date().toISOString() }
               : a
           ));
+
+          toast.success(`Migration completed for ${app.applicationName} with RULES PRIORITY!`);
+        } catch (error) {
+          console.error(`Error migrating ${app.applicationName}:`, error);
+          setApplications(prev => prev.map(a => 
+            a.id === app.id 
+              ? { ...a, status: 'failed' as const, lastUpdated: new Date().toISOString() }
+              : a
+          ));
+          toast.error(`Migration failed for ${app.applicationName}`);
         }
       }
-      toast.success('Migration completed successfully!');
+
+      toast.success(`Bulk migration completed with RULES PRIORITY for ${selectedApps.length} applications!`);
     } catch (error) {
-      console.error('Migration error:', error);
-      toast.error('Migration failed. Please try again.');
+      console.error('Bulk migration error:', error);
+      toast.error('Bulk migration failed. Please try again.');
     } finally {
-      setMigrating(false);
+      setLoading(false);
     }
   };
 
-  // Keep only the new versions of update functions
-  const updatePomXmlWithLatestVersions = (pomXml: string, dependencies: MuleDependency[], rules: MigrationRules): string => {
-    let updatedPom = pomXml;
-
-    // Update app.runtime version
-    updatedPom = updatedPom.replace(
-      /<app\.runtime>.*?<\/app\.runtime>/g,
-      `<app.runtime>${rules.muleVersion}</app.runtime>`
+  // Enhanced GitHub migration function with RULES PRIORITY
+  const migrateGitHubApplication = async (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules, githubToken: string) => {
+    console.log('=== GITHUB MIGRATION (MIGRATE ALL): APPLYING RULES WITH ABSOLUTE PRIORITY ===');
+    console.log('Application:', app.applicationName);
+    console.log('Migration Rules (ABSOLUTE PRIORITY):', rules);
+    
+    const repoPath = app.repository.replace('https://github.com/', '');
+    const newBranch = 'mulemigration';
+    
+    // Get base branch SHA
+    const branchRes = await axios.get(
+      `https://api.github.com/repos/${repoPath}/git/refs/heads/${app.branch}`,
+      { headers: { Authorization: `token ${githubToken}` } }
     );
+    const baseSha = branchRes.data.object.sha;
+    
+    // Create branch
+    try {
+      await axios.post(
+        `https://api.github.com/repos/${repoPath}/git/refs`,
+        {
+          ref: `refs/heads/${newBranch}`,
+          sha: baseSha
+        },
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
+    } catch (e) {
+      console.log('Branch may already exist, continuing...');
+    }
+    
+    // Update POM files with RULES PRIORITY
+    if ((selections.muleRuntime || selections.dependencies.length > 0) && app.pomPaths) {
+      for (const pomPath of app.pomPaths) {
+        try {
+          const pomRes = await axios.get(
+            `https://api.github.com/repos/${repoPath}/contents/${pomPath}?ref=${app.branch}`,
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          const pomSha = pomRes.data.sha;
+          const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
+          
+          const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections, rules);
+          
+          await axios.put(
+            `https://api.github.com/repos/${repoPath}/contents/${pomPath}`,
+            {
+              message: `Mule migration (MIGRATE ALL): update with RULES PRIORITY - ${pomPath}`,
+              content: btoa(updatedPom),
+              branch: newBranch,
+              sha: pomSha
+            },
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+        } catch (error) {
+          console.error(`Failed to update ${pomPath}:`, error);
+        }
+      }
+    }
+    
+    // Update artifact JSON files with rules-based versions
+    if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
+      for (const ajPath of app.artifactJsonPaths) {
+        try {
+          const ajRes = await axios.get(
+            `https://api.github.com/repos/${repoPath}/contents/${ajPath}?ref=${app.branch}`,
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          const ajSha = ajRes.data.sha;
+          const ajJson = JSON.parse(atob(ajRes.data.content.replace(/\n/g, '')));
+          
+          const updatedAj = { ...ajJson };
+          
+          if (selections.javaVersion) {
+            const ruleBasedJavaVersion = rules.javaVersion;
+            console.log(`ABSOLUTE PRIORITY (MIGRATE ALL): Setting Java version to ${ruleBasedJavaVersion} (from rules)`);
+            updatedAj.javaSpecificationVersions = [ruleBasedJavaVersion];
+          }
+          
+          if (selections.minMuleVersion) {
+            const ruleBasedMinMuleVersion = rules.minMuleVersion;
+            console.log(`ABSOLUTE PRIORITY (MIGRATE ALL): Setting min Mule version to ${ruleBasedMinMuleVersion} (from rules)`);
+            updatedAj.minMuleVersion = ruleBasedMinMuleVersion;
+          }
+          
+          await axios.put(
+            `https://api.github.com/repos/${repoPath}/contents/${ajPath}`,
+            {
+              message: `Mule migration (MIGRATE ALL): update artifact with RULES PRIORITY - ${ajPath}`,
+              content: btoa(JSON.stringify(updatedAj, null, 2)),
+              branch: newBranch,
+              sha: ajSha
+            },
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+        } catch (error) {
+          console.error(`Failed to update ${ajPath}:`, error);
+        }
+      }
+    }
+    
+    // Update project XML files if connectors are selected - RULES PRIORITY
+    if (selections.connectors.length > 0 && app.projectXmlPaths) {
+      for (const xmlPath of app.projectXmlPaths) {
+        try {
+          const xmlRes = await axios.get(
+            `https://api.github.com/repos/${repoPath}/contents/${xmlPath}?ref=${app.branch}`,
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+          const xmlSha = xmlRes.data.sha;
+          const xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
+          
+          const updatedXml = replaceCloudHubConnectors(xmlContent, selections, rules) + '\n<!-- Updated for CloudHub 2.0 migration (MIGRATE ALL) with RULES PRIORITY -->';
+          
+          await axios.put(
+            `https://api.github.com/repos/${repoPath}/contents/${xmlPath}`,
+            {
+              message: `Mule migration (MIGRATE ALL): update connectors with RULES PRIORITY - ${xmlPath}`,
+              content: btoa(updatedXml),
+              branch: newBranch,
+              sha: xmlSha
+            },
+            { headers: { Authorization: `token ${githubToken}` } }
+          );
+        } catch (error) {
+          console.error(`Failed to update ${xmlPath}:`, error);
+        }
+      }
+    }
+  };
 
-    // Update dependencies
-    dependencies.forEach(dep => {
-      const ruleVersion = rules.dependencyVersions.find(d => d.artifactId === dep.artifactId)?.version;
-      if (ruleVersion) {
-        const dependencyRegex = new RegExp(
-          `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
-          'g'
+  // Enhanced Azure DevOps migration function with RULES PRIORITY
+  const migrateAzureApplication = async (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules, azureToken: string) => {
+    try {
+      console.log('=== AZURE DEVOPS MIGRATION (MIGRATE ALL): APPLYING RULES WITH ABSOLUTE PRIORITY ===');
+      console.log('Application:', app.applicationName);
+      console.log('Migration Rules (ABSOLUTE PRIORITY):', JSON.stringify(rules, null, 2));
+      
+      const urlParts = app.repository.split('/');
+      const organization = urlParts[3];
+      const project = urlParts[4];
+      const repoId = app.id;
+      const azureApi = createAzureDevOpsAPI(organization, azureToken);
+      
+      // Create migration branch
+      const branchCreated = await azureApi.createBranch(project, repoId, 'mulemigration', app.branch);
+      if (!branchCreated) {
+        throw new Error('Failed to create migration branch. Please check your PAT permissions.');
+      }
+      
+      const filesToCommit = [];
+      
+      // Update POM files with RULES PRIORITY
+      if ((selections.muleRuntime || selections.dependencies.length > 0) && app.pomPaths) {
+        for (const pomPath of app.pomPaths) {
+          let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
+          if (pomXml && typeof pomXml === 'string') {
+            const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections, rules);
+            filesToCommit.push({ path: pomPath, content: updatedPom });
+          }
+        }
+      }
+      
+      // Update artifact JSON files with rules-based versions
+      if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
+        for (const ajPath of app.artifactJsonPaths) {
+          let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
+          let ajJson: Record<string, any> = {};
+          
+          if (ajContent && typeof ajContent === 'string') {
+            try {
+              ajJson = JSON.parse(ajContent);
+            } catch (e) {
+              console.warn('Invalid JSON in artifact JSON, creating new:', e);
+              ajJson = {};
+            }
+          }
+          
+          const updatedAj = { ...ajJson };
+          
+          if (selections.javaVersion) {
+            const ruleBasedJavaVersion = rules.javaVersion;
+            console.log(`ABSOLUTE PRIORITY (MIGRATE ALL): Setting Java version to ${ruleBasedJavaVersion} (from rules)`);
+            updatedAj.javaSpecificationVersions = [ruleBasedJavaVersion];
+          }
+          
+          if (selections.minMuleVersion) {
+            const ruleBasedMinMuleVersion = rules.minMuleVersion;
+            console.log(`ABSOLUTE PRIORITY (MIGRATE ALL): Setting min Mule version to ${ruleBasedMinMuleVersion} (from rules)`);
+            updatedAj.minMuleVersion = ruleBasedMinMuleVersion;
+          }
+          
+          filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
+        }
+      }
+      
+      // Update project XML files if connectors are selected - RULES PRIORITY
+      if (selections.connectors.length > 0 && app.projectXmlPaths) {
+        for (const xmlPath of app.projectXmlPaths) {
+          let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
+          if (xmlContent && typeof xmlContent === 'string') {
+            const updatedXml = replaceCloudHubConnectors(xmlContent, selections, rules) + '\n<!-- Updated for CloudHub 2.0 migration (MIGRATE ALL) with RULES PRIORITY -->';
+            filesToCommit.push({ path: xmlPath, content: updatedXml });
+          }
+        }
+      }
+      
+      // Commit all changes with rules data
+      if (filesToCommit.length > 0) {
+        console.log('=== CRITICAL (MIGRATE ALL): SENDING MIGRATION RULES TO AZURE DEVOPS EDGE FUNCTION ===');
+        console.log('Migration Rules being sent:', JSON.stringify(rules, null, 2));
+        
+        const committed = await azureApi.commitFiles(
+          project,
+          repoId,
+          'mulemigration',
+          filesToCommit,
+          'Mule migration (MIGRATE ALL): update with RULES PRIORITY',
+          rules
         );
-        updatedPom = updatedPom.replace(dependencyRegex, `$1${ruleVersion}$2`);
+        if (!committed) {
+          throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
+        }
+        return true;
+      } else {
+        console.warn(`No files to commit for ${app.name}`);
+        return false;
+      }
+    } catch (error) {
+      console.error(`Error migrating Azure DevOps application ${app.name}:`, error);
+      throw error;
+    }
+  };
+
+  // Enhanced function to update dependency versions in POM XML with RULES PRIORITY
+  const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[], selections: MigrationSelections, rules: MigrationRules): string => {
+    let updatedPom = pomXml;
+    
+    console.log('=== POM UPDATE (MIGRATE ALL): MIGRATION RULES HAVE ABSOLUTE PRIORITY ===');
+    console.log('Active Migration Rules:', rules);
+    
+    // Update app.runtime version if selected - RULES FIRST
+    if (selections.muleRuntime) {
+      const ruleBasedMuleVersion = rules.muleVersion;
+      console.log(`RULES PRIORITY (MIGRATE ALL): Setting app.runtime to ${ruleBasedMuleVersion}`);
+      updatedPom = updatedPom.replace(
+        /<app\.runtime>.*?<\/app\.runtime>/g,
+        `<app.runtime>${ruleBasedMuleVersion}</app.runtime>`
+      );
+    }
+    
+    // Remove CloudHub dependencies
+    const cloudHubDepPatterns = [
+      /<dependency>\s*<groupId>org\.mule\.modules<\/groupId>\s*<artifactId>mule-module-cloudhub<\/artifactId>[\s\S]*?<\/dependency>/g,
+      /<dependency>\s*<groupId>org\.mule\.connectors<\/groupId>\s*<artifactId>mule-cloudhub-connector<\/artifactId>[\s\S]*?<\/dependency>/g,
+      /<dependency>[\s\S]*?<artifactId>[^<]*cloudhub[^<]*<\/artifactId>[\s\S]*?<\/dependency>/g,
+      /<dependency>\s*<groupId>com\.mulesoft\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g,
+      /<dependency>\s*<groupId>com\.mulesoft\.modules\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g
+    ];
+    
+    cloudHubDepPatterns.forEach(pattern => {
+      const matches = updatedPom.match(pattern);
+      if (matches) {
+        updatedPom = updatedPom.replace(pattern, '');
       }
     });
-
+    
+    // Update selected dependencies - RULES TAKE ABSOLUTE PRIORITY
+    dependencies.forEach(dep => {
+      if (selections.dependencies.includes(dep.artifactId)) {
+        // PRIORITY 1: Check migration rules first
+        const ruleBasedVersion = getRuleBasedDependencyVersion(dep.artifactId, dep.latestVersion, rules);
+        
+        if (ruleBasedVersion && ruleBasedVersion !== dep.version) {
+          console.log(`ABSOLUTE PRIORITY UPDATE (MIGRATE ALL): ${dep.artifactId} from ${dep.version} to ${ruleBasedVersion} (Rules Priority)`);
+          
+          const dependencyRegex = new RegExp(
+            `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
+            'g'
+          );
+          
+          updatedPom = updatedPom.replace(dependencyRegex, `$1${ruleBasedVersion}$2`);
+        }
+      }
+    });
+    
+    // Clean up and add migration comment
+    updatedPom = updatedPom.replace(/\n\s*\n\s*\n/g, '\n\n');
+    
+    if (!updatedPom.includes('<!-- Updated for CloudHub 2.0 migration (MIGRATE ALL) with RULES PRIORITY -->')) {
+      updatedPom = updatedPom + '\n<!-- Updated for CloudHub 2.0 migration (MIGRATE ALL) with RULES PRIORITY -->';
+    }
+    
     return updatedPom;
   };
 
-  const updateArtifactJsonWithLatestJava = (artifactJson: any, rules: MigrationRules): any => {
-    const updatedJson = { ...artifactJson };
-    updatedJson.javaSpecificationVersions = [rules.javaVersion];
-    updatedJson.minMuleVersion = rules.minMuleVersion;
-    return updatedJson;
-  };
-
-  const updateProjectXml = (xml: string, rules: MigrationRules): string => {
-    let updatedXml = xml;
-
-    // Replace connectors based on rules
-    rules.connectorReplacements.forEach(replacement => {
-      const pattern = new RegExp(`<${replacement.from}:[^>]*>.*?</${replacement.from}:[^>]*>`, 'g');
-      updatedXml = updatedXml.replace(pattern, `<${replacement.to}:log level="INFO" message="Replaced ${replacement.from} with ${replacement.to} for CloudHub 2.0 migration" />`);
+  // Enhanced function to replace connectors with RULES PRIORITY
+  const replaceCloudHubConnectors = (xmlContent: string, selections: MigrationSelections, rules: MigrationRules): string => {
+    let updatedXml = xmlContent;
+    
+    console.log('=== CONNECTOR REPLACEMENT (MIGRATE ALL): MIGRATION RULES HAVE ABSOLUTE PRIORITY ===');
+    console.log('Active Migration Rules:', rules);
+    
+    // Only process selected connectors
+    const selectedCloudHubConnectors = selections.connectors.filter(name => 
+      name.toLowerCase().includes('cloudhub')
+    );
+    
+    if (selectedCloudHubConnectors.length === 0) {
+      return xmlContent;
+    }
+    
+    // PRIORITY 1: Get replacement connector from migration rules
+    const ruleBasedReplacement = getRuleBasedConnectorReplacement('cloudhub', rules);
+    console.log(`ABSOLUTE PRIORITY (MIGRATE ALL): Using connector replacement: ${ruleBasedReplacement} (from migration rules)`);
+    
+    // Add replacement namespace if not present
+    if (ruleBasedReplacement === 'logger' && !updatedXml.includes('xmlns:logger=')) {
+      const muleTag = updatedXml.match(/<mule[^>]*>/);
+      if (muleTag) {
+        const updatedMuleTag = muleTag[0].replace('>', ` xmlns:logger="http://www.mulesoft.org/schema/mule/logger" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/logger http://www.mulesoft.org/schema/mule/logger/current/mule-logger.xsd">`);
+        updatedXml = updatedXml.replace(muleTag[0], updatedMuleTag);
+      }
+    }
+    
+    // Replace CloudHub connectors with rule-based replacement
+    const cloudHubPatterns = [
+      {
+        pattern: /<cloudhub:create-notification[^>]*>[\s\S]*?<\/cloudhub:create-notification>/g,
+        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub notification replaced with ${ruleBasedReplacement} (MIGRATE ALL - RULES PRIORITY)" />`
+      },
+      {
+        pattern: /<cloudhub:create-notification[^>]*\/>/g,
+        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub notification replaced with ${ruleBasedReplacement} (MIGRATE ALL - RULES PRIORITY)" />`
+      }
+    ];
+    
+    cloudHubPatterns.forEach(({ pattern, replacement }) => {
+      const matches = updatedXml.match(pattern);
+      if (matches) {
+        console.log(`ABSOLUTE PRIORITY (MIGRATE ALL): Replacing CloudHub connectors with ${ruleBasedReplacement}:`, matches);
+        updatedXml = updatedXml.replace(pattern, replacement);
+      }
     });
-
+    
+    // Remove CloudHub namespace if no more CloudHub elements exist
+    if (!/<cloudhub:/.test(updatedXml)) {
+      updatedXml = updatedXml.replace(/xmlns:cloudhub="[^"]*"\s*/g, '');
+      updatedXml = updatedXml.replace(/http:\/\/www\.mulesoft\.org\/schema\/mule\/cloudhub[^\s]*/g, '');
+    }
+    
     return updatedXml;
   };
 
-  const getStatusColor = (status: MuleApplication['status']): 'default' | 'destructive' | 'outline' | 'secondary' => {
-    switch (status) {
-      case 'completed':
-        return 'default';
-      case 'in_progress':
-        return 'secondary';
-      case 'failed':
-        return 'destructive';
-      default:
-        return 'outline';
-    }
+  // Helper function to get rule-based dependency version
+  const getRuleBasedDependencyVersion = (artifactId: string, defaultVersion: string, rules: MigrationRules) => {
+    const customRule = rules.dependencyVersions.find(dep => dep.artifactId === artifactId);
+    const version = customRule?.version || defaultVersion;
+    console.log(`Dependency ${artifactId} Priority Check (MIGRATE ALL) - Rules: ${customRule?.version}, Default: ${defaultVersion}, Using: ${version}`);
+    return version;
   };
 
-  const getStatusIcon = (status: MuleApplication['status']) => {
-    switch (status) {
-      case 'completed':
-        return <CheckCircle2 className="h-5 w-5 text-green-500" />;
-      case 'in_progress':
-        return <AlertTriangle className="h-5 w-5 text-yellow-500" />;
-      case 'failed':
-        return <XCircle className="h-5 w-5 text-red-500" />;
-      default:
-        return <AlertTriangle className="h-5 w-5 text-gray-500" />;
-    }
-  };
-
-  const handleConnectGithub = async () => {
-    if (!githubToken.trim()) {
-      toast.error('Please enter a GitHub token');
-      return;
-    }
-    setConnecting('github');
-    try {
-      await updateOrganization(selectedOrganization!.id, {
-        github_token: githubToken.trim(),
-        repository_type: 'github',
-      });
-    } finally {
-      setConnecting(null);
-    }
-  };
-
-  const handleConnectAzure = async () => {
-    if (!azureToken.trim()) {
-      toast.error('Please enter an Azure DevOps token');
-      return;
-    }
-    if (!azureOrgUrl.trim()) {
-      toast.error('Please enter your Azure DevOps organization URL');
-      return;
-    }
-    setConnecting('azure');
-    try {
-      await updateOrganization(selectedOrganization!.id, {
-        azure_devops_token: azureToken.trim(),
-        azure_devops_url: azureOrgUrl.trim(),
-        repository_type: 'azure_devops',
-      });
-    } finally {
-      setConnecting(null);
-    }
+  // Helper function to get rule-based connector replacement
+  const getRuleBasedConnectorReplacement = (connectorName: string, rules: MigrationRules) => {
+    const customReplacement = rules.connectorReplacements.find(rep => 
+      connectorName.toLowerCase().includes(rep.from.toLowerCase())
+    );
+    const replacement = customReplacement?.to || 'logger';
+    console.log(`Connector ${connectorName} Priority Check (MIGRATE ALL) - Rules: ${customReplacement?.to}, Using: ${replacement}`);
+    return replacement;
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Migration</CardTitle>
-          <CardDescription>
-            Select applications to migrate to CloudHub 2.0
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {repositoryType === 'github' ? (
-              <div className="flex items-center space-x-2">
-                <Input
-                  type="password"
-                  placeholder="GitHub Personal Access Token"
-                  value={githubToken}
-                  onChange={(e) => setGithubToken(e.target.value)}
-                />
-                <Button
-                  onClick={handleConnectGithub}
-                  disabled={!githubToken || connecting === 'github'}
-                >
-                  {connecting === 'github' ? (
-                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Github className="mr-2 h-4 w-4" />
-                  )}
-                  Connect GitHub
-                </Button>
-              </div>
-            ) : repositoryType === 'azure_devops' ? (
-              <div className="space-y-2">
-                <div className="flex items-center space-x-2">
-                  <Input
-                    type="text"
-                    placeholder="Azure DevOps Organization URL"
-                    value={azureOrgUrl}
-                    onChange={(e) => setAzureOrgUrl(e.target.value)}
-                  />
-                  <Input
-                    type="password"
-                    placeholder="Azure DevOps Personal Access Token"
-                    value={azureToken}
-                    onChange={(e) => setAzureToken(e.target.value)}
-                  />
-                  <Button
-                    onClick={handleConnectAzure}
-                    disabled={!azureToken || !azureOrgUrl || connecting === 'azure'}
-                  >
-                    {connecting === 'azure' ? (
-                      <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <GitBranch className="mr-2 h-4 w-4" />
-                    )}
-                    Connect Azure DevOps
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="flex justify-between items-center">
-              <Button
-                onClick={handleFetchRepositories}
-                disabled={fetchingRepos || !(githubToken || azureToken)}
+          <CardTitle className="flex items-center justify-between">
+            <span>CloudHub 2.0 Migration</span>
+            <div className="flex items-center space-x-2">
+              <Button 
+                onClick={discoverRepositories} 
+                disabled={loading || discovering}
+                variant="outline"
               >
-                {fetchingRepos ? (
-                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                {discovering ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Discovering...
+                  </>
                 ) : (
-                  <RefreshCw className="mr-2 h-4 w-4" />
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Discover Applications
+                  </>
                 )}
-                Fetch Repositories
-              </Button>
-
-              <Button
-                onClick={() => handleMigrateSelected({
-                  javaVersion: '17',
-                  muleVersion: '4.4.0',
-                  minMuleVersion: '4.4.0',
-                  connectorReplacements: [],
-                  dependencyVersions: []
-                })}
-                disabled={migrating || applications.filter(app => app.selected).length === 0}
-              >
-                {migrating ? (
-                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <GitBranch className="mr-2 h-4 w-4" />
-                )}
-                Migrate Selected
               </Button>
             </div>
-
-            {error && (
-              <div className="text-red-500 text-sm">{error}</div>
-            )}
-
-            {applications.length > 0 && (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Select</TableHead>
-                    <TableHead>Application</TableHead>
-                    <TableHead>Repository</TableHead>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Mule Version</TableHead>
-                    <TableHead>Java Version</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Last Updated</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {applications.map((app) => (
-                    <TableRow key={app.id}>
-                      <TableCell>
-                        <input
-                          type="checkbox"
-                          checked={app.selected}
-                          onChange={() => toggleApplicationSelection(app.id)}
-                        />
-                      </TableCell>
-                      <TableCell>{app.applicationName}</TableCell>
-                      <TableCell>
-                        <a
-                          href={app.repository}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-500 hover:underline"
-                        >
-                          {app.name}
-                        </a>
-                      </TableCell>
-                      <TableCell>{app.branch}</TableCell>
-                      <TableCell>{app.muleVersion}</TableCell>
-                      <TableCell>{app.javaVersion}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={getStatusColor(app.status)}
-                          className="flex items-center space-x-1"
-                        >
-                          {getStatusIcon(app.status)}
-                          <span>{app.status}</span>
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {new Date(app.lastUpdated).toLocaleDateString()}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </div>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {repositories.length > 0 && (
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold mb-2">Discovered Repositories</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {repositories.map((repo) => (
+                  <Card key={repo.id} className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="font-medium">{repo.name}</h4>
+                        <p className="text-sm text-gray-600">{repo.language}</p>
+                      </div>
+                      <Badge variant={repo.isMuleProject ? 'default' : 'secondary'}>
+                        {repo.isMuleProject ? 'Mule' : 'Other'}
+                      </Badge>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {applications.length > 0 && (
+            <RepositoryList 
+              applications={applications} 
+              setApplications={setApplications}
+              onMigrateAll={handleMigrateAll}
+            />
+          )}
+          
+          {!loading && !discovering && repositories.length === 0 && (
+            <div className="text-center py-8">
+              <AlertTriangle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-600">No repositories discovered yet. Click "Discover Applications" to start.</p>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

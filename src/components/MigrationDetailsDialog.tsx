@@ -119,6 +119,24 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
     return migrationRules.minMuleVersion || getLatestMuleVersion();
   };
 
+  // CRITICAL FIX: Function to get rule-based dependency version
+  const getRuleBasedDependencyVersion = (artifactId: string, defaultLatestVersion: string) => {
+    const customRule = migrationRules.dependencyVersions.find(dep => dep.artifactId === artifactId);
+    const version = customRule?.version || defaultLatestVersion;
+    console.log(`DIALOG: Dependency ${artifactId} Priority Check - Rules: ${customRule?.version}, Default: ${defaultLatestVersion}, Using: ${version}`);
+    return version;
+  };
+
+  // CRITICAL FIX: Function to get rule-based connector replacement
+  const getRuleBasedConnectorReplacement = (connectorName: string) => {
+    const customReplacement = migrationRules.connectorReplacements.find(rep => 
+      connectorName.toLowerCase().includes(rep.from.toLowerCase())
+    );
+    const replacement = customReplacement?.to;
+    console.log(`DIALOG: Connector ${connectorName} Priority Check - Rules: ${customReplacement?.to}, Using: ${replacement || 'default'}`);
+    return replacement;
+  };
+
   const handleSelectAll = () => {
     if (application) {
       setSelections({
@@ -275,10 +293,9 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                 </div>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {application.dependencies.map(dep => {
-                    // Check if there's a rule-based version for this dependency
-                    const ruleBasedVersion = migrationRules.dependencyVersions.find(
-                      rule => rule.artifactId === dep.artifactId
-                    )?.version || dep.latestVersion;
+                    // CRITICAL FIX: Use rule-based version instead of latestVersion
+                    const ruleBasedVersion = getRuleBasedDependencyVersion(dep.artifactId, dep.latestVersion);
+                    const hasCustomRule = migrationRules.dependencyVersions.some(rule => rule.artifactId === dep.artifactId);
                     
                     return (
                       <div key={dep.artifactId} className="flex items-center space-x-3 p-3 border rounded-lg">
@@ -296,8 +313,11 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                           </div>
                         </div>
                         <div className="flex flex-col space-y-1">
+                          {hasCustomRule && (
+                            <Badge variant="destructive" className="text-xs">Custom Rules</Badge>
+                          )}
                           {ruleBasedVersion !== dep.version && (
-                            <Badge variant="destructive" className="text-xs">Rules Override</Badge>
+                            <Badge variant="outline" className="text-yellow-600 text-xs">Update Available</Badge>
                           )}
                           {dep.isDeprecated && (
                             <Badge variant="destructive" className="text-xs">Deprecated</Badge>
@@ -319,9 +339,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {application.connectors.filter(conn => !conn.isDeprecated).map(conn => {
                     // Check if there's a rule-based replacement for this connector
-                    const ruleBasedReplacement = migrationRules.connectorReplacements.find(
-                      rule => conn.name.toLowerCase().includes(rule.from.toLowerCase())
-                    )?.to;
+                    const ruleBasedReplacement = getRuleBasedConnectorReplacement(conn.name);
                     
                     return (
                       <div key={conn.name} className="flex items-center space-x-3 p-3 border rounded-lg">
@@ -362,9 +380,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                 </div>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {application.connectors.filter(conn => conn.isDeprecated).map(conn => {
-                    const ruleBasedReplacement = migrationRules.connectorReplacements.find(
-                      rule => conn.name.toLowerCase().includes(rule.from.toLowerCase())
-                    )?.to;
+                    const ruleBasedReplacement = getRuleBasedConnectorReplacement(conn.name);
                     
                     return (
                       <div key={conn.name} className="flex items-center space-x-3 p-3 border rounded-lg bg-red-50">
