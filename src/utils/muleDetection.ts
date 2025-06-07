@@ -1,4 +1,3 @@
-
 import { supabase } from '@/integrations/supabase/client';
 
 interface MuleDependency {
@@ -376,21 +375,19 @@ const getLatestVersionFromAPI = async (artifactId: string): Promise<string | nul
   try {
     console.log(`Fetching latest version for ${artifactId} from Supabase Edge Function...`);
     
-    // Call the Edge Function with the artifactId as a URL parameter named 'name'
-    const response = await fetch(`https://kmlxkpfwtcrlgkiuwyqs.supabase.co/functions/v1/mule-connector-versions?name=${encodeURIComponent(artifactId)}`, {
+    // Use the Supabase client's functions.invoke method with the artifactId as a parameter
+    const { data, error } = await supabase.functions.invoke('mule-connector-versions', {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${supabase.supabaseKey}`,
         'Content-Type': 'application/json'
-      }
+      },
+      body: { name: artifactId }
     });
     
-    if (!response.ok) {
-      console.error(`Error calling Edge Function for ${artifactId}: ${response.status} ${response.statusText}`);
+    if (error) {
+      console.error(`Error calling Edge Function for ${artifactId}:`, error);
       return null;
     }
-    
-    const data = await response.json();
     
     if (data && data.version) {
       console.log(`Successfully fetched version ${data.version} for ${artifactId} from Edge Function`);
