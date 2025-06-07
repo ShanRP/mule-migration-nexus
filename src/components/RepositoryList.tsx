@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -48,6 +47,7 @@ interface MuleApplication {
   pomPaths?: string[];
   artifactJsonPaths?: string[];
   projectXmlPaths?: string[];
+  savedSelections?: MigrationSelections;
 }
 
 interface MigrationSelections {
@@ -90,6 +90,15 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
 
   const deselectAll = () => {
     setApplications(prev => prev.map(app => ({ ...app, selected: false })));
+  };
+
+  // Function to save selections for an application
+  const handleSaveSelections = (app: MuleApplication, selections: MigrationSelections) => {
+    setApplications(prev => prev.map(a => 
+      a.id === app.id 
+        ? { ...a, savedSelections: selections }
+        : a
+    ));
   };
 
   // Enhanced function to update dependency versions in POM XML
@@ -735,6 +744,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         isOpen={detailsDialogOpen}
         onClose={closeDetailsDialog}
         onMigrate={handleSelectiveMigration}
+        onSaveSelections={handleSaveSelections}
         repositoryType={repositoryType || 'github'}
       />
     </div>
