@@ -127,6 +127,7 @@ export class AzureDevOpsAPI {
       return [];
     } catch (error) {
       console.error(`Error listing files for repository ${repositoryId}:`, error);
+      // Return empty array instead of throwing to prevent breaking the entire process
       return [];
     }
   }
@@ -215,6 +216,12 @@ export class AzureDevOpsAPI {
       const allFiles = await this.listFiles(projectName, repositoryId);
       console.log(`Analyzing ${allFiles.length} files for Mule artifacts in repository ${repositoryId}...`);
 
+      // If no files found, return empty arrays but don't error
+      if (allFiles.length === 0) {
+        console.log(`No files found in repository ${repositoryId}, skipping...`);
+        return { pomPaths, artifactJsonPaths, projectXmlPaths, connectors: [] };
+      }
+
       allFiles.forEach(filePath => {
         if (filePath.endsWith('pom.xml')) {
           pomPaths.push(filePath);
@@ -233,14 +240,17 @@ export class AzureDevOpsAPI {
       for (const xmlPath of projectXmlPaths) {
         try {
           const xmlContent = await this.getFileContent(projectName, repositoryId, xmlPath);
-          if (xmlContent && typeof xmlContent === 'string') {
+          if (xmlContent && typeof xmlContent === 'string' && xmlContent.trim().length > 0) {
             console.log(`Analyzing connectors in: ${xmlPath}`);
             const connectors = analyzeMuleConfiguration(xmlContent);
             console.log(`Found ${connectors.length} connectors in ${xmlPath}:`, connectors.map(c => c.name));
             allConnectors = [...allConnectors, ...connectors];
+          } else {
+            console.log(`No content or empty content for XML file: ${xmlPath}`);
           }
         } catch (error) {
           console.error(`Error extracting connectors from ${xmlPath}:`, error);
+          // Continue processing other files
         }
       }
 
@@ -249,10 +259,11 @@ export class AzureDevOpsAPI {
         index === self.findIndex(c => c.name === connector.name && c.namespace === connector.namespace)
       );
 
-      console.log(`Total unique connectors found: ${uniqueConnectors.length}`);
+      console.log(`Total unique connectors found in repository ${repositoryId}: ${uniqueConnectors.length}`);
 
     } catch (error) {
       console.error(`Error discovering project files for repository ${repositoryId}:`, error);
+      // Don't throw error, just return empty arrays to prevent breaking the entire process
     }
 
     const result = { pomPaths, artifactJsonPaths, projectXmlPaths, connectors: allConnectors };

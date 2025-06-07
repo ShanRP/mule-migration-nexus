@@ -229,6 +229,12 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
   console.log('Analyzing Mule configuration for connectors...');
   console.log('XML content preview:', muleConfigXml.substring(0, 500));
   
+  // Skip if XML content is too short or empty
+  if (!muleConfigXml || muleConfigXml.trim().length < 100) {
+    console.log('XML content too short or empty, skipping connector analysis');
+    return connectors;
+  }
+  
   // Extract connectors from namespaces with better name extraction
   const namespaceMatches = [...muleConfigXml.matchAll(/xmlns:(\w+)="([^"]+)"/g)];
   console.log(`Found ${namespaceMatches.length} namespace declarations`);

@@ -167,18 +167,45 @@ async function handleListFiles(body: any) {
 
   try {
     console.log(`Listing files for repository: ${repositoryId} in project: ${project}`);
+    
+    // Add timeout and better error handling
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+    
     const response = await fetch(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?recursionLevel=Full&api-version=7.0`,
       { 
         headers: { 
           'Authorization': getAzureAuthHeader(token), 
           'Accept': 'application/json' 
-        } 
+        },
+        signal: controller.signal
       }
     );
+    
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       console.error(`Azure DevOps API error: ${response.status} - ${response.statusText}`);
+      
+      // Handle specific error cases
+      if (response.status === 404) {
+        console.log(`Repository ${repositoryId} not found or no access`);
+        return new Response(JSON.stringify({ files: [] }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      } else if (response.status === 403) {
+        console.log(`Access denied to repository ${repositoryId}`);
+        return new Response(JSON.stringify({ files: [] }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      } else if (response.status === 500) {
+        console.log(`Server error for repository ${repositoryId}, returning empty files`);
+        return new Response(JSON.stringify({ files: [] }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      
       throw new Error(`Azure DevOps API error: ${response.status}`);
     }
 
@@ -210,8 +237,13 @@ async function handleListFiles(body: any) {
     }
   } catch (error) {
     console.error('Error listing files:', error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
+    
+    // Return empty files instead of throwing error to prevent breaking the entire process
+    if (error.name === 'AbortError') {
+      console.log(`Timeout occurred for repository ${repositoryId}`);
+    }
+    
+    return new Response(JSON.stringify({ files: [] }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
@@ -235,12 +267,19 @@ async function handleFileContent(body: any) {
     
     console.log(`Fetching from endpoint: ${endpoint}`);
     
+    // Add timeout for file content requests
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+    
     const response = await fetch(endpoint, { 
       headers: { 
         'Authorization': getAzureAuthHeader(token), 
         'Accept': 'application/json'
       },
+      signal: controller.signal
     });
+    
+    clearTimeout(timeoutId);
     
     if (!response.ok) {
       if (response.status === 404) {
@@ -312,8 +351,13 @@ async function handleFileContent(body: any) {
     });
   } catch (error) {
     console.error(`Error fetching file content for ${filePath}:`, error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
+    
+    // Return null content instead of throwing error
+    if (error.name === 'AbortError') {
+      console.log(`Timeout occurred for file ${filePath}`);
+    }
+    
+    return new Response(JSON.stringify({ content: null }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
