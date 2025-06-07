@@ -1,4 +1,4 @@
-import axios from 'axios';
+import { supabase } from '@/integrations/supabase/client';
 
 interface MuleDependency {
   groupId: string;
@@ -371,88 +371,31 @@ const getReplacementDependency = (groupId: string, artifactId: string): string |
   return replacements[artifactId];
 };
 
-const latestConnectorVersions: Record<string, string> = {
-  'mule-marketo-connector': '3.0.9',
-  'mule-oauth-module': '1.1.21',
-  'mule-amazon-ec2-connector': '2.5.8',
-  'mule-amazon-s3-connector': '7.0.5',
-  'mule-amazon-sns-connector': '4.7.11',
-  'mule-amazon-sqs-connector': '5.11.15',
-  'mule-amqp-connector': '1.8.2',
-  'anypoint-mq-connector': '4.0.12',
-  'mule-cassandradb-connector': '4.1.3',
-  'mule-kafka-connector': '4.10.1',
-  'mule-azure-service-bus-connector': '3.4.1',
-  'mule-box-connector': '5.3.0',
-  'mule-file-connector': '1.5.3',
-  'mule-db-connector': '1.14.14',
-  'mule-cloudhub-connector': '1.2.0',
-  'mule-http-connector': '1.10.3',
-  'mule-ftp-connector': '2.0.0',
-  'mule-email-connector': '1.7.5',
-  'mule-microsoft-dotnet-connector': '3.1.8',
-  'mule-jms-connector': '1.10.1',
-  'mule-ldap-connector': '3.6.0',
-  'mule-microsoft-dynamics-gp-connector': '2.1.7',
-  'mule-microsoft-dynamics-crm-connector': '3.2.15',
-  'mule-microsoft-service-bus-connector': '2.2.7',
-  'mule-objectstore-connector': '1.2.2',
-  'mule-module-file-extension-common': '1.4.3',
-  'mule-powershell-connector': '2.1.3',
-  'mule-mongodb-connector': '6.3.10',
-  'mule-hdfs-connector': '6.0.26',
-  'mule-sharepoint-connector': '3.7.0',
-  'mule-neo4j-connector': '3.0.7',
-  'mule-peoplesoft-connector': '3.1.9',
-  'mule-oracle-ebs-122-connector': '2.3.1',
-  'mule-netsuite-openair-connector': '2.0.12',
-  'mule-netsuite-connector': '11.10.0',
-  'mule-redis-connector': '5.4.6',
-  'mule-salesforce-composite-connector': '2.18.1',
-  'mule-salesforce-connector': '11.1.0',
-  'mule-rosettanet-connector': '2.1.0',
-  'mule-sfdc-analytics-connector': '3.17.0',
-  'mule-sfdc-marketing-cloud-connector': '4.1.4',
-  'mule-sap-concur-connector': '4.2.3',
-  'mule-sftp-connector': '2.4.4',
-  'mule-sap-connector': '5.9.12',
-  'mule-servicenow-connector': '6.17.1',
-  'mule-wsc-connector': '1.11.1',
-  'mule-workday-connector': '16.3.0',
-  'mule-zuora-connector': '6.0.11',
-  'mule-twilio-connector': '4.2.9',
-  'mule-sockets-connector': '1.2.5',
-  'mule-xml-module': '1.4.2',
-};
-
 const getLatestVersionFromAPI = async (artifactId: string): Promise<string | null> => {
   try {
-    console.log(`Fetching latest version for ${artifactId} from API...`);
-    const response = await axios.get(`http://localhost:5000/api/connector-version?name=${artifactId}`, {
+    console.log(`Fetching latest version for ${artifactId} from Supabase Edge Function...`);
+    
+    const { data, error } = await supabase.functions.invoke('mule-connector-versions', {
+      body: { artifactId },
       headers: {
-        'Accept': 'application/json'
+        'Content-Type': 'application/json'
       }
     });
     
-    if (response.data && response.data.version) {
-      console.log(`Successfully fetched version ${response.data.version} for ${artifactId}`);
-      return response.data.version;
+    if (error) {
+      console.error(`Error calling Edge Function for ${artifactId}:`, error);
+      return null;
     }
     
-    console.log(`No version found in API response for ${artifactId}`);
+    if (data && data.version) {
+      console.log(`Successfully fetched version ${data.version} for ${artifactId} from Edge Function`);
+      return data.version;
+    }
+    
+    console.log(`No version found in Edge Function response for ${artifactId}`);
     return null;
   } catch (error) {
-    if (axios.isAxiosError(error)) {
-      if (error.response?.status === 404) {
-        console.log(`Connector ${artifactId} not found in API: ${error.response.data?.details || error.message}`);
-      } else if (error.code === 'ERR_NETWORK') {
-        console.error(`Network error while fetching version for ${artifactId}. Please ensure the server is running.`);
-      } else {
-        console.error(`Error fetching version for ${artifactId}:`, error.response?.data?.details || error.message);
-      }
-    } else {
-      console.error(`Unexpected error fetching version for ${artifactId}:`, error);
-    }
+    console.error(`Unexpected error calling Edge Function for ${artifactId}:`, error);
     return null;
   }
 };
@@ -460,7 +403,7 @@ const getLatestVersionFromAPI = async (artifactId: string): Promise<string | nul
 // Modify the getLatestVersion function to handle both sync and async cases
 const getLatestVersion = async (groupId: string, artifactId: string, currentVersion: string): Promise<string> => {
   try {
-    // Try to get the latest version from the API
+    // Try to get the latest version from the Supabase Edge Function
     const latestVersionFromAPI = await getLatestVersionFromAPI(artifactId);
     if (latestVersionFromAPI) {
       return latestVersionFromAPI;
@@ -469,20 +412,9 @@ const getLatestVersion = async (groupId: string, artifactId: string, currentVers
     console.error(`Error in getLatestVersion for ${artifactId}:`, error);
   }
   
-  // Fallback to static version mapping
-  const staticVersion = latestConnectorVersions[artifactId];
-  if (staticVersion) {
-    console.log(`Using static version ${staticVersion} for ${artifactId} (fallback)`);
-    return staticVersion;
-  }
-  
+  // Fallback to current version if API call fails
   console.log(`No version found for ${artifactId}, using current version ${currentVersion}`);
   return currentVersion;
-};
-
-// Add a sync version for cases where we can't use async
-const getLatestVersionSync = (groupId: string, artifactId: string, currentVersion: string): string => {
-  return latestConnectorVersions[artifactId] || currentVersion;
 };
 
 const isDeprecatedConnector = (namespace: string): boolean => {
