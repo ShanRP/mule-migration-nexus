@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -499,24 +498,24 @@ const Migration: React.FC = () => {
     }
   };
 
-  // Enhanced GitHub migration function with RULES PRIORITY
+  // Enhanced GitHub migration function with RULES PRIORITY and proper branch handling
   const migrateGitHubApplication = async (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules, githubToken: string) => {
-    console.log('=== GITHUB MIGRATION (MIGRATE ALL): APPLYING RULES WITH ABSOLUTE PRIORITY ===');
+    console.log('=== GITHUB MIGRATION: APPLYING RULES WITH ABSOLUTE PRIORITY ===');
     console.log('Application:', app.applicationName);
     console.log('Migration Rules (ABSOLUTE PRIORITY):', rules);
     
     const repoPath = app.repository.replace('https://github.com/', '');
-    const newBranch = 'mulemigration';
+    const newBranch = `mulemigration-${Date.now()}`; // Create unique branch name
     
-    // Get base branch SHA
-    const branchRes = await axios.get(
-      `https://api.github.com/repos/${repoPath}/git/refs/heads/${app.branch}`,
-      { headers: { Authorization: `token ${githubToken}` } }
-    );
-    const baseSha = branchRes.data.object.sha;
-    
-    // Create branch
     try {
+      // Get base branch SHA
+      const branchRes = await axios.get(
+        `https://api.github.com/repos/${repoPath}/git/refs/heads/${app.branch}`,
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
+      const baseSha = branchRes.data.object.sha;
+      
+      // Create new migration branch
       await axios.post(
         `https://api.github.com/repos/${repoPath}/git/refs`,
         {
@@ -525,8 +524,11 @@ const Migration: React.FC = () => {
         },
         { headers: { Authorization: `token ${githubToken}` } }
       );
+      
+      console.log(`Successfully created migration branch: ${newBranch}`);
     } catch (e) {
-      console.log('Branch may already exist, continuing...');
+      console.log('Branch creation failed, using existing branch or continuing...', e);
+      // If branch creation fails, we'll continue with the default branch
     }
     
     // Update POM files with RULES PRIORITY
@@ -552,6 +554,8 @@ const Migration: React.FC = () => {
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
+          
+          console.log(`Successfully updated POM: ${pomPath}`);
         } catch (error) {
           console.error(`Failed to update ${pomPath}:`, error);
         }
@@ -593,6 +597,8 @@ const Migration: React.FC = () => {
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
+          
+          console.log(`Successfully updated artifact JSON: ${ajPath}`);
         } catch (error) {
           console.error(`Failed to update ${ajPath}:`, error);
         }
@@ -622,17 +628,37 @@ const Migration: React.FC = () => {
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
+          
+          console.log(`Successfully updated XML: ${xmlPath}`);
         } catch (error) {
           console.error(`Failed to update ${xmlPath}:`, error);
         }
       }
     }
+    
+    // Create pull request
+    try {
+      await axios.post(
+        `https://api.github.com/repos/${repoPath}/pulls`,
+        {
+          title: `CloudHub 2.0 Migration (MIGRATE ALL) - ${app.applicationName}`,
+          head: newBranch,
+          base: app.branch,
+          body: `Automated migration to CloudHub 2.0 with RULES PRIORITY for ${app.applicationName}\n\nMigration Rules Applied:\n- Java Version: ${rules.javaVersion}\n- Mule Version: ${rules.muleVersion}\n- Min Mule Version: ${rules.minMuleVersion}\n- Custom Dependencies: ${rules.dependencyVersions.length}\n- Connector Replacements: ${rules.connectorReplacements.length}`
+        },
+        { headers: { Authorization: `token ${githubToken}` } }
+      );
+      
+      console.log(`Successfully created pull request for ${app.applicationName}`);
+    } catch (error) {
+      console.error(`Failed to create pull request for ${app.applicationName}:`, error);
+    }
   };
 
-  // Enhanced Azure DevOps migration function with RULES PRIORITY
+  // Enhanced Azure DevOps migration function with RULES PRIORITY and proper branch handling
   const migrateAzureApplication = async (app: MuleApplication, rules: MigrationRules, azureToken: string) => {
     try {
-      console.log('=== AZURE DEVOPS MIGRATION (MIGRATE ALL): APPLYING RULES WITH ABSOLUTE PRIORITY ===');
+      console.log('=== AZURE DEVOPS MIGRATION: APPLYING RULES WITH ABSOLUTE PRIORITY ===');
       console.log('Application:', app.applicationName);
       console.log('Migration Rules (ABSOLUTE PRIORITY):', JSON.stringify(rules, null, 2));
       
@@ -656,10 +682,11 @@ const Migration: React.FC = () => {
       
       const repositoryId = targetRepo.id;
       const defaultBranch = targetRepo.defaultBranch || 'main';
+      const migrationBranch = `mulemigration-${Date.now()}`;
       
-      const branchCreated = await azureApi.createBranch(project, repositoryId, 'mulemigration', defaultBranch);
+      const branchCreated = await azureApi.createBranch(project, repositoryId, migrationBranch, defaultBranch);
       if (!branchCreated) {
-        console.warn('Failed to create migration branch, but continuing...');
+        console.warn('Failed to create migration branch, continuing with default branch...');
       }
       
       const filesToCommit = [];
@@ -677,6 +704,7 @@ const Migration: React.FC = () => {
               connectors: app.connectors.map(conn => conn.name) 
             }, rules);
             filesToCommit.push({ path: pomPath, content: updatedPom });
+            console.log(`Prepared POM update: ${pomPath}`);
           }
         } catch (error) {
           console.error(`Failed to process ${pomPath}:`, error);
@@ -702,6 +730,7 @@ const Migration: React.FC = () => {
           updatedAj.minMuleVersion = rules.minMuleVersion;
           
           filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
+          console.log(`Prepared artifact JSON update: ${ajPath}`);
         } catch (error) {
           console.error(`Failed to process ${ajPath}:`, error);
         }
@@ -720,29 +749,32 @@ const Migration: React.FC = () => {
               connectors: app.connectors.map(conn => conn.name) 
             }, rules) + '\n<!-- Updated for CloudHub 2.0 migration (MIGRATE ALL) with RULES PRIORITY -->';
             filesToCommit.push({ path: xmlPath, content: updatedXml });
+            console.log(`Prepared XML update: ${xmlPath}`);
           }
         } catch (error) {
           console.error(`Failed to process ${xmlPath}:`, error);
         }
       }
       
-      // Commit all changes
+      // Commit all changes to the migration branch
       if (filesToCommit.length > 0) {
+        const targetBranch = branchCreated ? migrationBranch : defaultBranch;
         const committed = await azureApi.commitFiles(
           project,
           repositoryId,
-          'mulemigration',
+          targetBranch,
           filesToCommit,
-          'Mule migration (MIGRATE ALL): update with RULES PRIORITY'
+          `Mule migration (MIGRATE ALL): update with RULES PRIORITY - ${app.applicationName}`
         );
         
         if (!committed) {
           throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
         }
         
+        console.log(`Successfully committed changes to ${targetBranch} for ${app.applicationName}`);
         return true;
       } else {
-        console.log(`No changes to push to Azure DevOps`);
+        console.log(`No changes to commit for ${app.applicationName}`);
         return false;
       }
     } catch (error) {
