@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -432,7 +433,7 @@ const Migration: React.FC = () => {
 
   const handleMigrateAll = async (rules: MigrationRules) => {
     console.log('=== MIGRATE ALL: APPLYING RULES WITH ABSOLUTE PRIORITY ===');
-    console.log('Migration Rules (ABSOLUTE PRIORITY):', JSON.stringify(rules, null, 2));
+    console.log('Migration Rules (ABSOLUTE PRIORITY):', rules);
     
     const selectedApps = applications.filter(app => app.selected);
     if (selectedApps.length === 0) {
@@ -464,12 +465,10 @@ const Migration: React.FC = () => {
             connectors: app.connectors.map(conn => conn.name)
           };
 
-          console.log(`MIGRATING ${app.applicationName} with rules:`, rules);
-
           if (repositoryType === 'github') {
             await migrateGitHubApplication(app, selections, rules, githubToken);
           } else if (repositoryType === 'azure_devops') {
-            await migrateAzureApplication(app, selections, rules, azureToken);
+            await migrateAzureApplication(app, rules, azureToken);
           }
 
           // Update application status to completed
@@ -504,7 +503,7 @@ const Migration: React.FC = () => {
   const migrateGitHubApplication = async (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules, githubToken: string) => {
     console.log('=== GITHUB MIGRATION (MIGRATE ALL): APPLYING RULES WITH ABSOLUTE PRIORITY ===');
     console.log('Application:', app.applicationName);
-    console.log('Migration Rules (ABSOLUTE PRIORITY):', JSON.stringify(rules, null, 2));
+    console.log('Migration Rules (ABSOLUTE PRIORITY):', rules);
     
     const repoPath = app.repository.replace('https://github.com/', '');
     const newBranch = 'mulemigration';
@@ -573,13 +572,13 @@ const Migration: React.FC = () => {
           const updatedAj = { ...ajJson };
           
           if (selections.javaVersion) {
-            const ruleBasedJavaVersion = rules.javaVersion || getLatestJavaVersion();
+            const ruleBasedJavaVersion = rules.javaVersion;
             console.log(`ABSOLUTE PRIORITY (MIGRATE ALL): Setting Java version to ${ruleBasedJavaVersion} (from rules)`);
             updatedAj.javaSpecificationVersions = [ruleBasedJavaVersion];
           }
           
           if (selections.minMuleVersion) {
-            const ruleBasedMinMuleVersion = rules.minMuleVersion || getLatestMuleVersion();
+            const ruleBasedMinMuleVersion = rules.minMuleVersion;
             console.log(`ABSOLUTE PRIORITY (MIGRATE ALL): Setting min Mule version to ${ruleBasedMinMuleVersion} (from rules)`);
             updatedAj.minMuleVersion = ruleBasedMinMuleVersion;
           }
@@ -631,7 +630,7 @@ const Migration: React.FC = () => {
   };
 
   // Enhanced Azure DevOps migration function with RULES PRIORITY
-  const migrateAzureApplication = async (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules, azureToken: string) => {
+  const migrateAzureApplication = async (app: MuleApplication, rules: MigrationRules, azureToken: string) => {
     try {
       console.log('=== AZURE DEVOPS MIGRATION (MIGRATE ALL): APPLYING RULES WITH ABSOLUTE PRIORITY ===');
       console.log('Application:', app.applicationName);
@@ -665,21 +664,26 @@ const Migration: React.FC = () => {
       
       const filesToCommit = [];
       
-      // Update POM files with absolute rules priority
+      // Update POM files
       for (const pomPath of app.pomPaths || []) {
         try {
           const pomContent = await azureApi.getFileContent(project, repositoryId, pomPath);
           if (pomContent && typeof pomContent === 'string') {
-            const updatedPom = updatePomDependencies(pomContent, app.dependencies, selections, rules);
+            const updatedPom = updatePomDependencies(pomContent, app.dependencies, { 
+              muleRuntime: true, 
+              javaVersion: true, 
+              minMuleVersion: true, 
+              dependencies: app.dependencies.map(dep => dep.artifactId), 
+              connectors: app.connectors.map(conn => conn.name) 
+            }, rules);
             filesToCommit.push({ path: pomPath, content: updatedPom });
-            console.log(`POM ${pomPath} updated with rules priority`);
           }
         } catch (error) {
           console.error(`Failed to process ${pomPath}:`, error);
         }
       }
       
-      // Update artifact JSON files with absolute rules priority
+      // Update artifact JSON files
       for (const ajPath of app.artifactJsonPaths || []) {
         try {
           const ajContent = await azureApi.getFileContent(project, repositoryId, ajPath);
@@ -694,15 +698,8 @@ const Migration: React.FC = () => {
           }
           
           const updatedAj = { ...ajJson };
-          
-          // Apply rules with absolute priority
-          const ruleBasedJavaVersion = rules.javaVersion || getLatestJavaVersion();
-          const ruleBasedMinMuleVersion = rules.minMuleVersion || getLatestMuleVersion();
-          
-          console.log(`ABSOLUTE PRIORITY: Java version ${ruleBasedJavaVersion}, MinMule version ${ruleBasedMinMuleVersion}`);
-          
-          updatedAj.javaSpecificationVersions = [ruleBasedJavaVersion];
-          updatedAj.minMuleVersion = ruleBasedMinMuleVersion;
+          updatedAj.javaSpecificationVersions = [rules.javaVersion];
+          updatedAj.minMuleVersion = rules.minMuleVersion;
           
           filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
         } catch (error) {
@@ -710,12 +707,18 @@ const Migration: React.FC = () => {
         }
       }
       
-      // Update project XML files with absolute rules priority
+      // Update project XML files
       for (const xmlPath of app.projectXmlPaths || []) {
         try {
           const xmlContent = await azureApi.getFileContent(project, repositoryId, xmlPath);
           if (xmlContent && typeof xmlContent === 'string') {
-            const updatedXml = replaceCloudHubConnectors(xmlContent, selections, rules) + '\n<!-- Updated for CloudHub 2.0 migration (MIGRATE ALL) with RULES PRIORITY -->';
+            const updatedXml = replaceCloudHubConnectors(xmlContent, { 
+              muleRuntime: true, 
+              javaVersion: true, 
+              minMuleVersion: true, 
+              dependencies: app.dependencies.map(dep => dep.artifactId), 
+              connectors: app.connectors.map(conn => conn.name) 
+            }, rules) + '\n<!-- Updated for CloudHub 2.0 migration (MIGRATE ALL) with RULES PRIORITY -->';
             filesToCommit.push({ path: xmlPath, content: updatedXml });
           }
         } catch (error) {
@@ -723,9 +726,8 @@ const Migration: React.FC = () => {
         }
       }
       
-      // Commit all changes with rules context
+      // Commit all changes
       if (filesToCommit.length > 0) {
-        console.log(`Committing ${filesToCommit.length} files with RULES PRIORITY`);
         const committed = await azureApi.commitFiles(
           project,
           repositoryId,
@@ -754,16 +756,16 @@ const Migration: React.FC = () => {
     }
   };
 
-  // Enhanced function to update dependency versions in POM XML with ABSOLUTE RULES PRIORITY
+  // Enhanced function to update dependency versions in POM XML with RULES PRIORITY
   const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[], selections: MigrationSelections, rules: MigrationRules): string => {
     let updatedPom = pomXml;
     
     console.log('=== POM UPDATE (MIGRATE ALL): MIGRATION RULES HAVE ABSOLUTE PRIORITY ===');
-    console.log('Active Migration Rules:', JSON.stringify(rules, null, 2));
+    console.log('Active Migration Rules:', rules);
     
     // Update app.runtime version if selected - RULES FIRST
     if (selections.muleRuntime) {
-      const ruleBasedMuleVersion = rules.muleVersion || getLatestMuleVersion();
+      const ruleBasedMuleVersion = rules.muleVersion;
       console.log(`RULES PRIORITY (MIGRATE ALL): Setting app.runtime to ${ruleBasedMuleVersion}`);
       updatedPom = updatedPom.replace(
         /<app\.runtime>.*?<\/app\.runtime>/g,
@@ -816,12 +818,12 @@ const Migration: React.FC = () => {
     return updatedPom;
   };
 
-  // Enhanced function to replace connectors with ABSOLUTE RULES PRIORITY
+  // Enhanced function to replace connectors with RULES PRIORITY
   const replaceCloudHubConnectors = (xmlContent: string, selections: MigrationSelections, rules: MigrationRules): string => {
     let updatedXml = xmlContent;
     
     console.log('=== CONNECTOR REPLACEMENT (MIGRATE ALL): MIGRATION RULES HAVE ABSOLUTE PRIORITY ===');
-    console.log('Active Migration Rules:', JSON.stringify(rules, null, 2));
+    console.log('Active Migration Rules:', rules);
     
     // Only process selected connectors
     const selectedCloudHubConnectors = selections.connectors.filter(name => 
@@ -874,33 +876,22 @@ const Migration: React.FC = () => {
     return updatedXml;
   };
 
-  // Helper function to get rule-based dependency version with ABSOLUTE PRIORITY
+  // Helper function to get rule-based dependency version
   const getRuleBasedDependencyVersion = (artifactId: string, defaultVersion: string, rules: MigrationRules) => {
-    // ABSOLUTE PRIORITY: Check rules first
     const customRule = rules.dependencyVersions.find(dep => dep.artifactId === artifactId);
-    if (customRule && customRule.version) {
-      console.log(`ABSOLUTE PRIORITY: Using rule version ${customRule.version} for ${artifactId}`);
-      return customRule.version;
-    }
-    
-    console.log(`No rule found for ${artifactId}, using default version ${defaultVersion}`);
-    return defaultVersion;
+    const version = customRule?.version || defaultVersion;
+    console.log(`Dependency ${artifactId} Priority Check (MIGRATE ALL) - Rules: ${customRule?.version}, Default: ${defaultVersion}, Using: ${version}`);
+    return version;
   };
 
-  // Helper function to get rule-based connector replacement with ABSOLUTE PRIORITY
+  // Helper function to get rule-based connector replacement
   const getRuleBasedConnectorReplacement = (connectorName: string, rules: MigrationRules) => {
-    // ABSOLUTE PRIORITY: Check rules first
     const customReplacement = rules.connectorReplacements.find(rep => 
       connectorName.toLowerCase().includes(rep.from.toLowerCase())
     );
-    
-    if (customReplacement && customReplacement.to) {
-      console.log(`ABSOLUTE PRIORITY: Using rule replacement ${customReplacement.to} for ${connectorName}`);
-      return customReplacement.to;
-    }
-    
-    console.log(`No rule replacement found for ${connectorName}, using default 'logger'`);
-    return 'logger';
+    const replacement = customReplacement?.to || 'logger';
+    console.log(`Connector ${connectorName} Priority Check (MIGRATE ALL) - Rules: ${customReplacement?.to}, Using: ${replacement}`);
+    return replacement;
   };
 
   return (
