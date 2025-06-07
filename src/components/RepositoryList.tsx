@@ -29,6 +29,14 @@ interface MuleConnector {
   cloudHub2Alternative?: string;
 }
 
+interface MigrationSelections {
+  muleRuntime: boolean;
+  javaVersion: boolean;
+  minMuleVersion: boolean;
+  dependencies: string[];
+  connectors: string[];
+}
+
 interface MuleApplication {
   id: string;
   name: string;
@@ -47,14 +55,7 @@ interface MuleApplication {
   pomPaths?: string[];
   artifactJsonPaths?: string[];
   projectXmlPaths?: string[];
-}
-
-interface MigrationSelections {
-  muleRuntime: boolean;
-  javaVersion: boolean;
-  minMuleVersion: boolean;
-  dependencies: string[];
-  connectors: string[];
+  savedSelections?: MigrationSelections;
 }
 
 interface RepositoryListProps {
@@ -89,6 +90,15 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
 
   const deselectAll = () => {
     setApplications(prev => prev.map(app => ({ ...app, selected: false })));
+  };
+
+  // Save checkbox selections for a specific application
+  const handleSaveSelections = (app: MuleApplication, selections: MigrationSelections) => {
+    setApplications(prev => prev.map(a => 
+      a.id === app.id 
+        ? { ...a, savedSelections: selections }
+        : a
+    ));
   };
 
   // Enhanced function to update dependency versions in POM XML
@@ -774,6 +784,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         isOpen={detailsDialogOpen}
         onClose={closeDetailsDialog}
         onMigrate={handleSelectiveMigration}
+        onSaveSelections={handleSaveSelections}
         repositoryType={repositoryType || 'github'}
       />
     </div>
