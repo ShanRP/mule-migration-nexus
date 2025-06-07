@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,8 +8,15 @@ import { toast } from 'sonner';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import RepositoryList from './RepositoryList';
 import { createAzureDevOpsAPI } from '@/utils/azureDevopsApi';
-import { getLatestMuleVersion, getLatestJavaVersion, analyzeMuleProject } from '@/utils/muleDetection';
+import { getLatestMuleVersion, getLatestJavaVersion } from '@/utils/muleDetection';
 import axios from 'axios';
+
+interface Repository {
+  id: string;
+  name: string;
+  language: string;
+  isMuleProject: boolean;
+}
 
 interface MuleDependency {
   groupId: string;
@@ -35,6 +43,7 @@ interface MuleApplication {
   repository: string;
   branch: string;
   muleVersion: string;
+  muleRuntime: string;
   javaVersion: string;
   dependencies: MuleDependency[];
   connectors: MuleConnector[];
@@ -64,12 +73,74 @@ interface MigrationSelections {
   connectors: string[];
 }
 
+// Helper functions
+const isMuleApplication = (pomXml: string): boolean => {
+  return pomXml.includes('mule-runtime') || pomXml.includes('mule-core') || pomXml.includes('<app.runtime>');
+};
+
+const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
+  const muleRuntimeMatch = pomXml.match(/<app\.runtime>(.*?)<\/app\.runtime>/);
+  const muleVersionMatch = pomXml.match(/<mule\.version>(.*?)<\/mule\.version>/);
+  const javaVersionMatch = pomXml.match(/<maven\.compiler\.target>(.*?)<\/maven\.compiler\.target>/);
+  const applicationNameMatch = pomXml.match(/<artifactId>(.*?)<\/artifactId>/);
+
+  const muleRuntime = muleRuntimeMatch ? muleRuntimeMatch[1] : '4.4.0';
+  const muleVersion = muleVersionMatch ? muleVersionMatch[1] : muleRuntime;
+  const javaVersion = javaVersionMatch ? javaVersionMatch[1] : (artifactJson?.javaSpecificationVersions?.[0] || '8');
+  const applicationName = applicationNameMatch ? applicationNameMatch[1] : 'Unknown';
+
+  // Extract dependencies
+  const dependencies: MuleDependency[] = [];
+  const dependencyRegex = /<dependency>[\s\S]*?<groupId>(.*?)<\/groupId>[\s\S]*?<artifactId>(.*?)<\/artifactId>[\s\S]*?<version>(.*?)<\/version>[\s\S]*?<\/dependency>/g;
+  let match;
+  while ((match = dependencyRegex.exec(pomXml)) !== null) {
+    const [, groupId, artifactId, version] = match;
+    dependencies.push({
+      groupId,
+      artifactId,
+      version,
+      latestVersion: version, // This would be fetched from a service in real implementation
+      isDeprecated: false
+    });
+  }
+
+  return {
+    applicationName,
+    muleRuntime,
+    muleVersion,
+    javaVersion,
+    dependencies
+  };
+};
+
+const analyzeMuleConfiguration = (xmlContent: string): MuleConnector[] => {
+  const connectors: MuleConnector[] = [];
+  
+  // Look for CloudHub connectors
+  if (xmlContent.includes('cloudhub:')) {
+    connectors.push({
+      name: 'CloudHub Connector',
+      namespace: 'cloudhub',
+      isDeprecated: true,
+      cloudHub2Alternative: 'Logger Connector'
+    });
+  }
+
+  return connectors;
+};
+
+const extractAzureOrganization = (url: string): string => {
+  const match = url.match(/https:\/\/dev\.azure\.com\/([^\/]+)/);
+  return match ? match[1] : '';
+};
+
 const Migration: React.FC = () => {
   const { selectedOrganization } = useOrganizations();
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [applications, setApplications] = useState<MuleApplication[]>([]);
   const [loading, setLoading] = useState(false);
   const [discovering, setDiscovering] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Reset state when organization changes
   useEffect(() => {
@@ -130,7 +201,7 @@ const Migration: React.FC = () => {
       if (page > 10) break;
     }
 
-    const muleApps: any[] = [];
+    const muleApps: MuleApplication[] = [];
     for (const repo of allRepos) {
       try {
         const allFiles = await listAllGitHubFiles(repo.full_name, '', token);
@@ -143,7 +214,7 @@ const Migration: React.FC = () => {
           
           const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = await extractMuleInfo(pomXml);
           
-          let connectors: any[] = [];
+          let connectors: MuleConnector[] = [];
           try {
             const muleDirPath = `${pomPath.substring(0, pomPath.lastIndexOf('/'))}/src/main/mule`;
             const muleDir = await axios.get(
@@ -163,13 +234,11 @@ const Migration: React.FC = () => {
           } catch {}
           
           let artifactJson = null;
-          let artifactJsonPath = null;
           for (const ajPath of artifactJsonFiles) {
             const artifactContent = await fetchGitHubFileContent(repo.full_name, ajPath, token);
             if (artifactContent) {
               try {
                 artifactJson = JSON.parse(artifactContent);
-                artifactJsonPath = ajPath;
                 break;
               } catch {}
             }
@@ -181,6 +250,7 @@ const Migration: React.FC = () => {
             repository: repo.html_url,
             branch: repo.default_branch,
             muleVersion,
+            muleRuntime,
             javaVersion,
             dependencies,
             connectors,
@@ -203,12 +273,9 @@ const Migration: React.FC = () => {
   // Updated Azure DevOps scanning using the new API
   const scanAzureRepositories = async (token: string, organization: string) => {
     try {
-      // console.log('Scanning Azure DevOps repositories using new API...');
-      
       const azureApi = createAzureDevOpsAPI(organization, token);
       
       const projects = await azureApi.getProjects();
-      // console.log(`Found ${projects.length} projects`);
       
       const allRepos = [];
       for (const project of projects) {
@@ -222,37 +289,28 @@ const Migration: React.FC = () => {
         }
       }
       
-      console.log(`Found ${allRepos.length} repositories to scan`);
-      const muleApps: any[] = [];
+      const muleApps: MuleApplication[] = [];
       
       for (const repo of allRepos) {
         try {
-          // console.log(`Scanning repo ${repo.name}...`);
           const allFiles = await azureApi.listFiles(repo.project, repo.id);
           const pomFiles = allFiles.filter(f => f.toLowerCase().endsWith('pom.xml'));
           const artifactJsonFiles = allFiles.filter(f => f.endsWith('mule-artifact.json'));
           const projectXmlFiles = allFiles.filter(f => f.startsWith('src/main/') && f.endsWith('.xml'));
-          // console.log(`Found ${pomFiles.length} pom.xml files in ${repo.name}`);
           
           for (const pomPath of pomFiles) {
-            // console.log(`Processing pom.xml at ${pomPath}...`);
             const pomXml = await azureApi.getFileContent(repo.project, repo.id, pomPath);
             if (!pomXml || !isMuleApplication(pomXml)) {
-              // console.log(`Skipping non-Mule pom.xml at ${pomPath}`);
               continue;
             }
             
             let artifactJson = null;
-            let artifactJsonPath = null;
             for (const ajPath of artifactJsonFiles) {
               try {
-                // console.log(`Fetching mule-artifact.json: ${ajPath}`);
                 const artifactContent = await azureApi.getFileContent(repo.project, repo.id, ajPath);
                 if (artifactContent) {
                   try {
                     artifactJson = JSON.parse(artifactContent);
-                    artifactJsonPath = ajPath;
-                    // console.log('Successfully parsed artifact.json:', artifactJson);
                     break;
                   } catch (e) {
                     console.error('Error parsing artifact.json:', e);
@@ -265,7 +323,7 @@ const Migration: React.FC = () => {
             
             const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = await extractMuleInfo(pomXml, artifactJson);
             
-            let connectors: any[] = [];
+            let connectors: MuleConnector[] = [];
             const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
             const configPaths = [
               `${pomDir}/src/main/mule/mule-configuration.xml`,
@@ -293,13 +351,13 @@ const Migration: React.FC = () => {
               }
             }
             
-            // console.log(`Found Mule application: ${applicationName} in ${repo.name}`);
             muleApps.push({
               id: `${repo.id}-${pomPath}`,
               name: repo.name,
               repository: repo.webUrl || `https://dev.azure.com/${organization}/${repo.project}/_git/${repo.name}`,
               branch: repo.defaultBranch || 'main',
               muleVersion,
+              muleRuntime,
               javaVersion,
               dependencies,
               connectors,
@@ -309,7 +367,7 @@ const Migration: React.FC = () => {
               applicationName,
               pomPaths: pomFiles,
               artifactJsonPaths: artifactJsonFiles,
-              projectXmlPaths: projectXmlPaths,
+              projectXmlPaths: projectXmlFiles,
             });
           }
         } catch (error) {
@@ -320,149 +378,6 @@ const Migration: React.FC = () => {
     } catch (error) {
       console.error('Azure DevOps scanning failed:', error);
       throw error;
-    }
-  };
-
-  // Updated Azure DevOps migration using new API
-  const migrateAzureApplication = async (app: MuleApplication, rules: MigrationRules) => {
-    try {
-      // console.log(`Migrating app: ${app.applicationName} with paths:`, {
-      //   pomPaths: app.pomPaths,
-      //   artifactJsonPaths: app.artifactJsonPaths,
-      //   projectXmlPaths: app.projectXmlPaths
-      // });
-
-      // Extract Azure DevOps details from repository URL
-      const urlParts = app.repository.split('/');
-      const organization = urlParts[3];
-      const project = urlParts[4];
-      let repoName = urlParts[6];
-      
-      // Handle .git extension in repo name
-      if (repoName && repoName.endsWith('.git')) {
-        repoName = repoName.replace('.git', '');
-      }
-      
-      // console.log('Starting Azure DevOps migration for app:', app.applicationName);
-      // console.log('Azure DevOps details:', { organization, project, repoName });
-      
-      const azureApi = createAzureDevOpsAPI(organization, azureToken);
-      
-      // Get repositories to find the correct repo ID
-      const repos = await azureApi.getRepositories(project);
-      const targetRepo = repos.find(r => r.name === repoName || r.name === `${repoName}.git`);
-      
-      if (!targetRepo) {
-        throw new Error(`Repository ${repoName} not found in project ${project}`);
-      }
-      
-      const repositoryId = targetRepo.id;
-      const defaultBranch = targetRepo.defaultBranch || 'main';
-      
-      // console.log('Default branch:', defaultBranch);
-      
-      // Create migration branch
-      // console.log(`Creating migration branch for ${app.applicationName}...`);
-      const branchCreated = await azureApi.createBranch(project, repositoryId, 'mulemigration', defaultBranch);
-      if (!branchCreated) {
-        console.warn('Failed to create migration branch, but continuing...');
-      }
-      
-      // Prepare files for commit
-      const filesToCommit = [];
-      
-      // Update POM files
-      // console.log(`Processing POM files for Azure DevOps:`, app.pomPaths);
-      for (const pomPath of app.pomPaths) {
-        try {
-          // console.log(`Fetching pom.xml: ${pomPath}`);
-          const pomContent = await azureApi.getFileContent(project, repositoryId, pomPath);
-          if (pomContent && typeof pomContent === 'string') {
-            const updatedPom = updatePomXmlWithLatestVersions(pomContent, app.dependencies, rules);
-            filesToCommit.push({ path: pomPath, content: updatedPom });
-          } else {
-            console.warn(`Could not fetch or invalid POM file: ${pomPath}`);
-          }
-        } catch (error) {
-          console.error(`Failed to process ${pomPath}:`, error);
-        }
-      }
-      
-      // Update artifact JSON files
-      // console.log(`Processing artifact JSON files for Azure DevOps:`, app.artifactJsonPaths);
-      for (const ajPath of app.artifactJsonPaths) {
-        try {
-          // console.log(`Fetching mule-artifact.json: ${ajPath}`);
-          const ajContent = await azureApi.getFileContent(project, repositoryId, ajPath);
-          if (ajContent) {
-            let ajJson;
-            if (typeof ajContent === 'string') {
-              ajJson = JSON.parse(ajContent);
-            } else if (typeof ajContent === 'object') {
-              ajJson = ajContent;
-            } else {
-              console.warn(`Invalid artifact JSON content type for ${ajPath}:`, typeof ajContent);
-              continue;
-            }
-            
-            const updatedAj = updateArtifactJsonWithLatestJava(ajJson, rules);
-            filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
-          } else {
-            console.warn(`Could not fetch artifact JSON file: ${ajPath}`);
-          }
-        } catch (error) {
-          console.error(`Failed to process ${ajPath}:`, error);
-        }
-      }
-      
-      // Update project XML files
-      // console.log(`Processing project XML files for Azure DevOps:`, app.projectXmlPaths);
-      for (const xmlPath of app.projectXmlPaths) {
-        try {
-          // console.log(`Fetching project XML: ${xmlPath}`);
-          const xmlContent = await azureApi.getFileContent(project, repositoryId, xmlPath);
-          if (xmlContent && typeof xmlContent === 'string') {
-            const updatedXml = updateProjectXml(xmlContent, rules);
-            filesToCommit.push({ path: xmlPath, content: updatedXml });
-          } else {
-            console.warn(`Could not fetch or invalid XML file: ${xmlPath}`);
-          }
-        } catch (error) {
-          console.error(`Failed to process ${xmlPath}:`, error);
-        }
-      }
-      
-      // Commit all changes
-      if (filesToCommit.length > 0) {
-        // console.log(`Committing ${filesToCommit.length} files for ${app.applicationName}...`);
-        const committed = await azureApi.commitFiles(
-          project, 
-          repositoryId, 
-          'mulemigration', 
-          filesToCommit, 
-          'Mule migration: update dependencies and configuration for CloudHub 2.0'
-        );
-        
-        if (!committed) {
-          throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
-        }
-        
-        // console.log(`Successfully migrated ${app.applicationName}`);
-        return true;
-      } else {
-        console.log(`No changes to push to Azure DevOps`);
-        return false;
-      }
-    } catch (error) {
-      console.error(`Error migrating Azure DevOps application ${app.applicationName}:`, error);
-      if (error instanceof Error) {
-        toast.error(`Failed to migrate ${app.applicationName}: ${error.message}`);
-      } else {
-        toast.error(`Failed to migrate ${app.applicationName}. Please check your connection and try again.`);
-      }
-      throw error;
-    } finally {
-      console.log(`Azure DevOps migration completed for app: ${app.applicationName}`);
     }
   };
 
@@ -488,14 +403,12 @@ const Migration: React.FC = () => {
     setRepositories([]);
 
     try {
-      let muleApps: any[] = [];
+      let muleApps: MuleApplication[] = [];
       
       if (selectedOrganization?.repository_type === 'github' && selectedOrganization?.github_token) {
-        // console.log('Scanning GitHub repositories...');
         const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
         muleApps = await scanGitHubRepositories(selectedOrganization?.github_token, orgName);
       } else if (selectedOrganization?.repository_type === 'azure_devops' && selectedOrganization?.azure_devops_token) {
-        // console.log('Scanning Azure DevOps repositories...');
         const organization = extractAzureOrganization(selectedOrganization?.azure_devops_url || '');
         if (!organization) {
           toast.error('Please provide a valid Azure DevOps organization URL');
@@ -504,7 +417,7 @@ const Migration: React.FC = () => {
         muleApps = await scanAzureRepositories(selectedOrganization?.azure_devops_token, organization);
       }
 
-      setRepositories(muleApps);
+      setApplications(muleApps);
       if (muleApps.length > 0) {
         toast.success(`Found ${muleApps.length} Mule application(s)!`);
       } else {
@@ -517,15 +430,6 @@ const Migration: React.FC = () => {
       setDiscovering(false);
     }
   };
-
-  // Select/deselect apps
-  const toggleApplicationSelection = (appId: string) => {
-    setApplications(prev => prev.map(app => 
-      app.id === appId ? { ...app, selected: !app.selected } : app
-    ));
-  };
-
-  const normalizePath = (path: string) => path.replace(/^\/+/, '');
 
   const handleMigrateAll = async (rules: MigrationRules) => {
     console.log('=== MIGRATE ALL: APPLYING RULES WITH ABSOLUTE PRIORITY ===');
@@ -564,7 +468,7 @@ const Migration: React.FC = () => {
           if (repositoryType === 'github') {
             await migrateGitHubApplication(app, selections, rules, githubToken);
           } else if (repositoryType === 'azure_devops') {
-            await migrateAzureApplication(app, selections, rules, azureToken);
+            await migrateAzureApplication(app, rules, azureToken);
           }
 
           // Update application status to completed
@@ -726,7 +630,7 @@ const Migration: React.FC = () => {
   };
 
   // Enhanced Azure DevOps migration function with RULES PRIORITY
-  const migrateAzureApplication = async (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules, azureToken: string) => {
+  const migrateAzureApplication = async (app: MuleApplication, rules: MigrationRules, azureToken: string) => {
     try {
       console.log('=== AZURE DEVOPS MIGRATION (MIGRATE ALL): APPLYING RULES WITH ABSOLUTE PRIORITY ===');
       console.log('Application:', app.applicationName);
@@ -735,95 +639,119 @@ const Migration: React.FC = () => {
       const urlParts = app.repository.split('/');
       const organization = urlParts[3];
       const project = urlParts[4];
-      const repoId = app.id;
+      let repoName = urlParts[6];
+      
+      if (repoName && repoName.endsWith('.git')) {
+        repoName = repoName.replace('.git', '');
+      }
+      
       const azureApi = createAzureDevOpsAPI(organization, azureToken);
       
-      // Create migration branch
-      const branchCreated = await azureApi.createBranch(project, repoId, 'mulemigration', app.branch);
+      const repos = await azureApi.getRepositories(project);
+      const targetRepo = repos.find(r => r.name === repoName || r.name === `${repoName}.git`);
+      
+      if (!targetRepo) {
+        throw new Error(`Repository ${repoName} not found in project ${project}`);
+      }
+      
+      const repositoryId = targetRepo.id;
+      const defaultBranch = targetRepo.defaultBranch || 'main';
+      
+      const branchCreated = await azureApi.createBranch(project, repositoryId, 'mulemigration', defaultBranch);
       if (!branchCreated) {
-        throw new Error('Failed to create migration branch. Please check your PAT permissions.');
+        console.warn('Failed to create migration branch, but continuing...');
       }
       
       const filesToCommit = [];
       
-      // Update POM files with RULES PRIORITY
-      if ((selections.muleRuntime || selections.dependencies.length > 0) && app.pomPaths) {
-        for (const pomPath of app.pomPaths) {
-          let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
-          if (pomXml && typeof pomXml === 'string') {
-            const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections, rules);
+      // Update POM files
+      for (const pomPath of app.pomPaths || []) {
+        try {
+          const pomContent = await azureApi.getFileContent(project, repositoryId, pomPath);
+          if (pomContent && typeof pomContent === 'string') {
+            const updatedPom = updatePomDependencies(pomContent, app.dependencies, { 
+              muleRuntime: true, 
+              javaVersion: true, 
+              minMuleVersion: true, 
+              dependencies: app.dependencies.map(dep => dep.artifactId), 
+              connectors: app.connectors.map(conn => conn.name) 
+            }, rules);
             filesToCommit.push({ path: pomPath, content: updatedPom });
           }
+        } catch (error) {
+          console.error(`Failed to process ${pomPath}:`, error);
         }
       }
       
-      // Update artifact JSON files with rules-based versions
-      if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
-        for (const ajPath of app.artifactJsonPaths) {
-          let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
-          let ajJson: Record<string, any> = {};
+      // Update artifact JSON files
+      for (const ajPath of app.artifactJsonPaths || []) {
+        try {
+          const ajContent = await azureApi.getFileContent(project, repositoryId, ajPath);
+          let ajJson: any = {};
           
-          if (ajContent && typeof ajContent === 'string') {
-            try {
+          if (ajContent) {
+            if (typeof ajContent === 'string') {
               ajJson = JSON.parse(ajContent);
-            } catch (e) {
-              console.warn('Invalid JSON in artifact JSON, creating new:', e);
-              ajJson = {};
+            } else if (typeof ajContent === 'object') {
+              ajJson = ajContent;
             }
           }
           
           const updatedAj = { ...ajJson };
-          
-          if (selections.javaVersion) {
-            const ruleBasedJavaVersion = rules.javaVersion;
-            console.log(`ABSOLUTE PRIORITY (MIGRATE ALL): Setting Java version to ${ruleBasedJavaVersion} (from rules)`);
-            updatedAj.javaSpecificationVersions = [ruleBasedJavaVersion];
-          }
-          
-          if (selections.minMuleVersion) {
-            const ruleBasedMinMuleVersion = rules.minMuleVersion;
-            console.log(`ABSOLUTE PRIORITY (MIGRATE ALL): Setting min Mule version to ${ruleBasedMinMuleVersion} (from rules)`);
-            updatedAj.minMuleVersion = ruleBasedMinMuleVersion;
-          }
+          updatedAj.javaSpecificationVersions = [rules.javaVersion];
+          updatedAj.minMuleVersion = rules.minMuleVersion;
           
           filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
+        } catch (error) {
+          console.error(`Failed to process ${ajPath}:`, error);
         }
       }
       
-      // Update project XML files if connectors are selected - RULES PRIORITY
-      if (selections.connectors.length > 0 && app.projectXmlPaths) {
-        for (const xmlPath of app.projectXmlPaths) {
-          let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
+      // Update project XML files
+      for (const xmlPath of app.projectXmlPaths || []) {
+        try {
+          const xmlContent = await azureApi.getFileContent(project, repositoryId, xmlPath);
           if (xmlContent && typeof xmlContent === 'string') {
-            const updatedXml = replaceCloudHubConnectors(xmlContent, selections, rules) + '\n<!-- Updated for CloudHub 2.0 migration (MIGRATE ALL) with RULES PRIORITY -->';
+            const updatedXml = replaceCloudHubConnectors(xmlContent, { 
+              muleRuntime: true, 
+              javaVersion: true, 
+              minMuleVersion: true, 
+              dependencies: app.dependencies.map(dep => dep.artifactId), 
+              connectors: app.connectors.map(conn => conn.name) 
+            }, rules) + '\n<!-- Updated for CloudHub 2.0 migration (MIGRATE ALL) with RULES PRIORITY -->';
             filesToCommit.push({ path: xmlPath, content: updatedXml });
           }
+        } catch (error) {
+          console.error(`Failed to process ${xmlPath}:`, error);
         }
       }
       
-      // Commit all changes with rules data
+      // Commit all changes
       if (filesToCommit.length > 0) {
-        console.log('=== CRITICAL (MIGRATE ALL): SENDING MIGRATION RULES TO AZURE DEVOPS EDGE FUNCTION ===');
-        console.log('Migration Rules being sent:', JSON.stringify(rules, null, 2));
-        
         const committed = await azureApi.commitFiles(
           project,
-          repoId,
+          repositoryId,
           'mulemigration',
           filesToCommit,
-          'Mule migration (MIGRATE ALL): update with RULES PRIORITY',
-          rules
+          'Mule migration (MIGRATE ALL): update with RULES PRIORITY'
         );
+        
         if (!committed) {
           throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
         }
+        
         return true;
       } else {
-        console.warn(`No files to commit for ${app.name}`);
+        console.log(`No changes to push to Azure DevOps`);
         return false;
       }
     } catch (error) {
-      console.error(`Error migrating Azure DevOps application ${app.name}:`, error);
+      console.error(`Error migrating Azure DevOps application ${app.applicationName}:`, error);
+      if (error instanceof Error) {
+        toast.error(`Failed to migrate ${app.applicationName}: ${error.message}`);
+      } else {
+        toast.error(`Failed to migrate ${app.applicationName}. Please check your connection and try again.`);
+      }
       throw error;
     }
   };
