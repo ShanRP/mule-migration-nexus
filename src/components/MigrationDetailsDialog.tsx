@@ -163,6 +163,10 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
   const hasSelections = selections.muleRuntime || selections.javaVersion || selections.minMuleVersion || 
                       selections.dependencies.length > 0 || selections.connectors.length > 0;
 
+  // Separate deprecated and non-deprecated connectors
+  const deprecatedConnectors = application.connectors.filter(conn => conn.isDeprecated);
+  const regularConnectors = application.connectors.filter(conn => !conn.isDeprecated);
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
@@ -210,7 +214,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
               <div className="flex-1">
                 <div className="font-medium">Mule Runtime</div>
                 <div className="text-sm text-gray-600">
-                  Current: {application.muleRuntime} → Latest: {getLatestMuleVersion()}
+                  Current: {application.muleRuntime} → Latest: <span className="font-bold text-green-600">{getLatestMuleVersion()}</span>
                 </div>
               </div>
               {application.muleRuntime !== getLatestMuleVersion() && (
@@ -226,7 +230,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
               <div className="flex-1">
                 <div className="font-medium">Java Version (mule-artifact.json)</div>
                 <div className="text-sm text-gray-600">
-                  Current: {application.javaVersion} → Latest: {getLatestJavaVersion()}
+                  Current: {application.javaVersion} → Latest: <span className="font-bold text-green-600">{getLatestJavaVersion()}</span>
                 </div>
               </div>
               {application.javaVersion !== getLatestJavaVersion() && (
@@ -242,7 +246,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
               <div className="flex-1">
                 <div className="font-medium">MinMuleVersion (mule-artifact.json)</div>
                 <div className="text-sm text-gray-600">
-                  Sync with Mule Runtime: {getLatestMuleVersion()}
+                  Sync with Mule Runtime: <span className="font-bold text-green-600">{getLatestMuleVersion()}</span>
                 </div>
               </div>
               <Badge variant="outline" className="text-blue-600">Sync Required</Badge>
@@ -266,7 +270,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                         {dep.groupId}
                       </div>
                       <div className="text-sm">
-                        Current: {dep.version} → Latest: {dep.latestVersion}
+                        Current: {dep.version} → Latest: <span className="font-bold text-green-600">{dep.latestVersion}</span>
                       </div>
                     </div>
                     <div className="flex flex-col space-y-1">
@@ -286,12 +290,12 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
             </div>
           )}
 
-          {/* Connectors */}
-          {application.connectors.length > 0 && (
+          {/* Regular Connectors */}
+          {regularConnectors.length > 0 && (
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Connectors ({application.connectors.length})</h3>
+              <h3 className="text-lg font-semibold">Connectors ({regularConnectors.length})</h3>
               <div className="space-y-2 max-h-60 overflow-y-auto">
-                {application.connectors.map(conn => (
+                {regularConnectors.map(conn => (
                   <div key={conn.name} className="flex items-center space-x-3 p-3 border rounded-lg">
                     <Checkbox
                       checked={selections.connectors.includes(conn.name)}
@@ -302,12 +306,38 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                       <div className="text-sm text-gray-600 truncate">{conn.namespace}</div>
                     </div>
                     <div className="flex flex-col space-y-1">
-                      {conn.isDeprecated && (
-                        <Badge variant="destructive" className="text-xs">Deprecated</Badge>
-                      )}
                       {conn.cloudHub2Alternative && (
                         <Badge variant="outline" className="text-blue-600 text-xs">
-                          CloudHub 2.0: {conn.cloudHub2Alternative}
+                          CloudHub 2.0: <span className="font-bold">{conn.cloudHub2Alternative}</span>
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Deprecated Connectors - Separate Section */}
+          {deprecatedConnectors.length > 0 && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-red-600">Deprecated Connectors ({deprecatedConnectors.length})</h3>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {deprecatedConnectors.map(conn => (
+                  <div key={conn.name} className="flex items-center space-x-3 p-3 border rounded-lg bg-red-50">
+                    <Checkbox
+                      checked={selections.connectors.includes(conn.name)}
+                      onCheckedChange={() => handleConnectorToggle(conn.name)}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium">{conn.name}</div>
+                      <div className="text-sm text-gray-600 truncate">{conn.namespace}</div>
+                    </div>
+                    <div className="flex flex-col space-y-1">
+                      <Badge variant="destructive" className="text-xs">Deprecated</Badge>
+                      {conn.cloudHub2Alternative && (
+                        <Badge variant="outline" className="text-blue-600 text-xs">
+                          CloudHub 2.0: <span className="font-bold">{conn.cloudHub2Alternative}</span>
                         </Badge>
                       )}
                     </div>
