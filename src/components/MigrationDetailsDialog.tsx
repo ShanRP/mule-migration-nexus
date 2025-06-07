@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -119,22 +118,33 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
     return migrationRules.minMuleVersion || getLatestMuleVersion();
   };
 
-  // CRITICAL FIX: Function to get rule-based dependency version
+  // CRITICAL FIX: Function to get rule-based dependency version with ABSOLUTE PRIORITY
   const getRuleBasedDependencyVersion = (artifactId: string, defaultLatestVersion: string) => {
+    // ABSOLUTE PRIORITY: Check migration rules first
     const customRule = migrationRules.dependencyVersions.find(dep => dep.artifactId === artifactId);
-    const version = customRule?.version || defaultLatestVersion;
-    console.log(`DIALOG: Dependency ${artifactId} Priority Check - Rules: ${customRule?.version}, Default: ${defaultLatestVersion}, Using: ${version}`);
-    return version;
+    if (customRule && customRule.version) {
+      console.log(`DIALOG ABSOLUTE PRIORITY: Using rule version ${customRule.version} for ${artifactId} (overriding default ${defaultLatestVersion})`);
+      return customRule.version;
+    }
+    
+    console.log(`DIALOG: No custom rule found for ${artifactId}, using default ${defaultLatestVersion}`);
+    return defaultLatestVersion;
   };
 
-  // CRITICAL FIX: Function to get rule-based connector replacement
+  // CRITICAL FIX: Function to get rule-based connector replacement with ABSOLUTE PRIORITY
   const getRuleBasedConnectorReplacement = (connectorName: string) => {
+    // ABSOLUTE PRIORITY: Check migration rules first
     const customReplacement = migrationRules.connectorReplacements.find(rep => 
       connectorName.toLowerCase().includes(rep.from.toLowerCase())
     );
-    const replacement = customReplacement?.to;
-    console.log(`DIALOG: Connector ${connectorName} Priority Check - Rules: ${customReplacement?.to}, Using: ${replacement || 'default'}`);
-    return replacement;
+    
+    if (customReplacement && customReplacement.to) {
+      console.log(`DIALOG ABSOLUTE PRIORITY: Using rule replacement ${customReplacement.to} for ${connectorName}`);
+      return customReplacement.to;
+    }
+    
+    console.log(`DIALOG: No rule replacement found for ${connectorName}`);
+    return null;
   };
 
   const handleSelectAll = () => {
@@ -188,7 +198,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
     if (!application) return;
     
     console.log('=== MIGRATION WITH RULES PRIORITY ===');
-    console.log('Migration Rules (HIGHEST PRIORITY):', migrationRules);
+    console.log('Migration Rules (HIGHEST PRIORITY):', JSON.stringify(migrationRules, null, 2));
     console.log('Selections:', selections);
     
     setMigrating(true);
@@ -231,6 +241,16 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                     Mule: <strong>{getRuleBasedMuleVersion()}</strong> | 
                     MinMule: <strong>{getRuleBasedMinMuleVersion()}</strong>
                   </p>
+                  {migrationRules.dependencyVersions.length > 0 && (
+                    <p className="text-sm text-yellow-700 mt-1">
+                      <strong>Custom Dependency Rules:</strong> {migrationRules.dependencyVersions.length} dependencies
+                    </p>
+                  )}
+                  {migrationRules.connectorReplacements.length > 0 && (
+                    <p className="text-sm text-yellow-700 mt-1">
+                      <strong>Connector Replacement Rules:</strong> {migrationRules.connectorReplacements.length} replacements
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -277,7 +297,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
               </div>
             </div>
 
-            {/* Dependencies */}
+            {/* Dependencies with ABSOLUTE RULES PRIORITY */}
             {application.dependencies.length > 0 && (
               <div className="space-y-4">
                 <div className="flex justify-between items-center">
@@ -293,9 +313,12 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                 </div>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {application.dependencies.map(dep => {
-                    // CRITICAL FIX: Use rule-based version instead of latestVersion
+                    // CRITICAL FIX: Use rule-based version with ABSOLUTE PRIORITY
                     const ruleBasedVersion = getRuleBasedDependencyVersion(dep.artifactId, dep.latestVersion);
                     const hasCustomRule = migrationRules.dependencyVersions.some(rule => rule.artifactId === dep.artifactId);
+                    const willBeUpdated = ruleBasedVersion !== dep.version;
+                    
+                    console.log(`Dependency ${dep.artifactId}: current=${dep.version}, rule-based=${ruleBasedVersion}, hasRule=${hasCustomRule}, willUpdate=${willBeUpdated}`);
                     
                     return (
                       <div key={dep.artifactId} className="flex items-center space-x-3 p-3 border rounded-lg">
@@ -309,15 +332,26 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                             {dep.groupId}
                           </div>
                           <div className="text-sm">
-                            Current: {dep.version} → Rules Priority: <span className="font-bold text-red-600">{ruleBasedVersion}</span>
+                            Current: {dep.version} → 
+                            {hasCustomRule ? (
+                              <span className="font-bold text-red-600 ml-1">
+                                Rules Priority: {ruleBasedVersion}
+                              </span>
+                            ) : (
+                              <span className="ml-1">Latest: {ruleBasedVersion}</span>
+                            )}
                           </div>
                         </div>
                         <div className="flex flex-col space-y-1">
                           {hasCustomRule && (
-                            <Badge variant="destructive" className="text-xs">Custom Rules</Badge>
+                            <Badge variant="destructive" className="text-xs">
+                              Custom Rules Applied
+                            </Badge>
                           )}
-                          {ruleBasedVersion !== dep.version && (
-                            <Badge variant="outline" className="text-yellow-600 text-xs">Update Available</Badge>
+                          {willBeUpdated && (
+                            <Badge variant="outline" className="text-yellow-600 text-xs">
+                              {hasCustomRule ? 'Rule Update' : 'Version Update'}
+                            </Badge>
                           )}
                           {dep.isDeprecated && (
                             <Badge variant="destructive" className="text-xs">Deprecated</Badge>
@@ -330,7 +364,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
               </div>
             )}
 
-            {/* Regular Connectors */}
+            {/* Regular Connectors with ABSOLUTE RULES PRIORITY */}
             {application.connectors.filter(conn => !conn.isDeprecated).length > 0 && (
               <div className="space-y-4">
                 <div className="flex justify-between items-center">
@@ -338,7 +372,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                 </div>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {application.connectors.filter(conn => !conn.isDeprecated).map(conn => {
-                    // Check if there's a rule-based replacement for this connector
+                    // Check if there's a rule-based replacement for this connector with ABSOLUTE PRIORITY
                     const ruleBasedReplacement = getRuleBasedConnectorReplacement(conn.name);
                     
                     return (
@@ -354,10 +388,10 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                         <div className="flex flex-col space-y-1">
                           {ruleBasedReplacement && (
                             <Badge variant="destructive" className="text-xs">
-                              Rules: {ruleBasedReplacement}
+                              Rules Priority: {ruleBasedReplacement}
                             </Badge>
                           )}
-                          {conn.cloudHub2Alternative && (
+                          {!ruleBasedReplacement && conn.cloudHub2Alternative && (
                             <Badge variant="outline" className="text-blue-600 text-xs">
                               CloudHub 2.0: {conn.cloudHub2Alternative}
                             </Badge>
@@ -370,7 +404,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
               </div>
             )}
 
-            {/* Deprecated Connectors - Separate Section */}
+            {/* Deprecated Connectors - Separate Section with ABSOLUTE RULES PRIORITY */}
             {application.connectors.filter(conn => conn.isDeprecated).length > 0 && (
               <div className="space-y-4">
                 <div className="flex justify-between items-center pt-4 border-t">
@@ -396,7 +430,7 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                           <Badge variant="destructive" className="text-xs">Deprecated</Badge>
                           {ruleBasedReplacement && (
                             <Badge variant="destructive" className="text-xs">
-                              Rules: {ruleBasedReplacement}
+                              Rules Priority: {ruleBasedReplacement}
                             </Badge>
                           )}
                         </div>
