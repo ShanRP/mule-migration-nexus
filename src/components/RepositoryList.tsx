@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -71,7 +70,7 @@ interface MigrationRules {
 interface RepositoryListProps {
   applications: MuleApplication[];
   setApplications: React.Dispatch<React.SetStateAction<MuleApplication[]>>;
-  onMigrateAll: () => void;
+  onMigrateAll: (rules: MigrationRules) => void;
 }
 
 const RepositoryList: React.FC<RepositoryListProps> = ({ 
@@ -697,7 +696,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
                 Deselect All
               </Button>
               <Button 
-                onClick={onMigrateAll}
+                onClick={() => onMigrateAll(migrationRules)}
                 disabled={selectedCount === 0 || migrating}
                 size="lg"
                 className="bg-blue-600 hover:bg-blue-700"

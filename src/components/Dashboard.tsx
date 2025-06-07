@@ -46,6 +46,14 @@ interface MuleApplication {
   projectXmlPaths?: string[];
 }
 
+interface MigrationRules {
+  javaVersion: string;
+  muleVersion: string;
+  minMuleVersion: string;
+  connectorReplacements: { from: string; to: string; }[];
+  dependencyVersions: { artifactId: string; version: string; }[];
+}
+
 const Dashboard = () => {
   const { selectedOrganization, updateOrganization } = useOrganizations();
   const [githubToken, setGithubToken] = useState('');
@@ -700,7 +708,7 @@ const Dashboard = () => {
   };
 
   // GitHub migration function
-  const migrateGitHubApplication = async (app: MuleApplication) => {
+  const migrateGitHubApplication = async (app: MuleApplication, rules: MigrationRules) => {
     console.log('Starting GitHub migration for app:', app.applicationName);
     
     const repoPath = app.repository.replace('https://github.com/', '');
@@ -825,7 +833,7 @@ const Dashboard = () => {
   };
 
   // Azure DevOps migration function
-  const migrateAzureApplication = async (app: MuleApplication) => {
+  const migrateAzureApplication = async (app: MuleApplication, rules: MigrationRules) => {
     try {
       // console.log('Starting Azure DevOps migration for app:', app.applicationName);
       
@@ -920,7 +928,7 @@ const Dashboard = () => {
     }
   };
 
-  const handleMigrateAll = async () => {
+  const handleMigrateAll = async (rules: MigrationRules) => {
     const selectedApps = applications.filter(app => app.selected);
     if (selectedApps.length === 0) {
       toast.error('Please select at least one application to migrate');
@@ -942,7 +950,7 @@ const Dashboard = () => {
       
       for (const app of selectedApps) {
         try {
-          // console.log(`Starting migration for: ${app.applicationName}`);
+          console.log(`Starting migration for: ${app.applicationName} with rules:`, rules);
           
           // Update application status to in_progress
           setApplications(prev => prev.map(a => 
@@ -952,9 +960,9 @@ const Dashboard = () => {
           ));
           
           if (repositoryType === 'github') {
-            await migrateGitHubApplication(app);
+            await migrateGitHubApplication(app, rules);
           } else if (repositoryType === 'azure_devops') {
-            await migrateAzureApplication(app);
+            await migrateAzureApplication(app, rules);
           }
           
           // Update application status to completed
@@ -965,7 +973,7 @@ const Dashboard = () => {
           ));
           
           successCount++;
-          // console.log(`Successfully migrated: ${app.applicationName}`);
+          console.log(`Successfully migrated: ${app.applicationName}`);
           
         } catch (error) {
           console.error(`Failed to migrate ${app.applicationName}:`, error);

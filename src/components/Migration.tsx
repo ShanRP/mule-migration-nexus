@@ -21,6 +21,16 @@ interface MuleDependency {
   replacement?: string;
 }
 
+interface MuleConnector {
+  name: string;
+  namespace: string;
+  isDeprecated: boolean;
+  cloudHub2Alternative?: string;
+  artifactId?: string;
+  version?: string;
+  replacement?: string;
+}
+
 interface MuleApplication {
   id: string;
   name: string;
@@ -29,15 +39,23 @@ interface MuleApplication {
   muleVersion: string;
   javaVersion: string;
   dependencies: MuleDependency[];
-  connectors: any[];
-  artifactJson: any;
+  connectors: MuleConnector[];
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   lastUpdated: string;
   selected?: boolean;
   applicationName: string;
-  pomPaths: string[];
-  artifactJsonPaths: string[];
-  projectXmlPaths: string[];
+  pomPaths?: string[];
+  artifactJsonPaths?: string[];
+  projectXmlPaths?: string[];
+  artifactJson?: any;
+}
+
+interface MigrationRules {
+  javaVersion: string;
+  muleVersion: string;
+  minMuleVersion: string;
+  connectorReplacements: { from: string; to: string; }[];
+  dependencyVersions: { artifactId: string; version: string; }[];
 }
 
 const Migration = () => {
@@ -307,7 +325,7 @@ const Migration = () => {
   };
 
   // Updated Azure DevOps migration using new API
-  const migrateAzureApplication = async (app: MuleApplication) => {
+  const migrateAzureApplication = async (app: MuleApplication, rules: MigrationRules) => {
     try {
       // console.log(`Migrating app: ${app.applicationName} with paths:`, {
       //   pomPaths: app.pomPaths,
@@ -361,7 +379,7 @@ const Migration = () => {
           // console.log(`Fetching pom.xml: ${pomPath}`);
           const pomContent = await azureApi.getFileContent(project, repositoryId, pomPath);
           if (pomContent && typeof pomContent === 'string') {
-            const updatedPom = updatePomXmlWithLatestVersions(pomContent, app.dependencies);
+            const updatedPom = updatePomXmlWithLatestVersions(pomContent, app.dependencies, rules);
             filesToCommit.push({ path: pomPath, content: updatedPom });
           } else {
             console.warn(`Could not fetch or invalid POM file: ${pomPath}`);
@@ -388,7 +406,7 @@ const Migration = () => {
               continue;
             }
             
-            const updatedAj = updateArtifactJsonWithLatestJava(ajJson);
+            const updatedAj = updateArtifactJsonWithLatestJava(ajJson, rules);
             filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
           } else {
             console.warn(`Could not fetch artifact JSON file: ${ajPath}`);
@@ -405,7 +423,7 @@ const Migration = () => {
           // console.log(`Fetching project XML: ${xmlPath}`);
           const xmlContent = await azureApi.getFileContent(project, repositoryId, xmlPath);
           if (xmlContent && typeof xmlContent === 'string') {
-            const updatedXml = updateProjectXml(xmlContent);
+            const updatedXml = updateProjectXml(xmlContent, rules);
             filesToCommit.push({ path: xmlPath, content: updatedXml });
           } else {
             console.warn(`Could not fetch or invalid XML file: ${xmlPath}`);
@@ -508,63 +526,9 @@ const Migration = () => {
     ));
   };
 
-  // Helper to update pom.xml content with latest versions
-  const updatePomXmlWithLatestVersions = (pomXml: string, dependencies: MuleDependency[]) => {
-    if (typeof pomXml !== 'string') {
-      // console.error('POM XML is not a string:', typeof pomXml);
-      return String(pomXml);
-    }
-    
-    let updated = pomXml;
-    dependencies.forEach(dep => {
-      if (dep.latestVersion && dep.version && dep.latestVersion !== dep.version) {
-        // Replace the version for this dependency
-        const regex = new RegExp(`(<artifactId>${dep.artifactId}</artifactId>[\s\S]*?<version>)([^<]+)(</version>)`, 'g');
-        updated = updated.replace(regex, `$1${dep.latestVersion}$3`);
-      }
-    });
-    // Add migration comment
-    if (!updated.includes('<!-- Updated for CloudHub 2.0 migration -->')) {
-      updated += '\n<!-- Updated for CloudHub 2.0 migration -->';
-    }
-    return updated;
-  };
-
-  // Helper to update mule-artifact.json with latest Java version
-  const updateArtifactJsonWithLatestJava = (artifactJson: any) => {
-    if (!artifactJson) return artifactJson;
-    const latestJava = '17';
-    if (Array.isArray(artifactJson['javaSpecificationVersions'])) {
-      artifactJson['javaSpecificationVersions'][0] = latestJava;
-    } else if (artifactJson['javaversion']) {
-      artifactJson['javaversion'] = latestJava;
-    } else if (artifactJson['javaVersion']) {
-      artifactJson['javaVersion'] = latestJava;
-    } else if (artifactJson['java']) {
-      artifactJson['java'] = latestJava;
-    }
-    return artifactJson;
-  };
-
-  // Helper to update src/main/*.xml (for demo, just add a migration comment)
-  const updateProjectXml = (xml: string) => {
-    if (typeof xml !== 'string') {
-      console.error('XML content is not a string:', typeof xml);
-      return String(xml);
-    }
-    
-    console.log('Replacing CloudHub connectors with Logger connectors...');
-    if (!xml.includes('<!-- Updated for CloudHub 2.0 migration -->')) {
-      return xml + '\n<!-- Updated for CloudHub 2.0 migration -->';
-    }
-    return xml;
-  };
-
-  // Helper to normalize file paths (remove leading slash)
   const normalizePath = (path: string) => path.replace(/^\/+/, '');
 
-  // Migrate selected apps
-  const handleMigrateSelected = async () => {
+  const handleMigrateSelected = async (rules: MigrationRules) => {
     const selectedApps = applications.filter(app => app.selected);
     if (selectedApps.length === 0) {
       toast.error('Please select at least one application to migrate');
@@ -593,94 +557,203 @@ const Migration = () => {
               { headers: { Authorization: `token ${githubToken}` } }
             );
           } catch (e) {/* branch may already exist */}
-          // 3. Update all pom.xml files
-          for (const pomPath of app.pomPaths) {
-            const normPomPath = normalizePath(pomPath);
-            // console.log('Attempting to fetch/update pom.xml:', normPomPath, 'on branch', newBranch);
-            const pomRes = await axios.get(
-              `https://api.github.com/repos/${repoPath}/contents/${normPomPath}`,
+
+          // 3. Update files with rules priority
+          const filesToCommit = [];
+
+          // Update POM files
+          if (app.pomPaths) {
+            for (const pomPath of app.pomPaths) {
+              const pomContent = await fetchGitHubFileContent(repoPath, pomPath, githubToken);
+              if (pomContent) {
+                const updatedPom = updatePomXmlWithLatestVersions(pomContent, app.dependencies, rules);
+                filesToCommit.push({ path: pomPath, content: updatedPom });
+              }
+            }
+          }
+
+          // Update artifact JSON files
+          if (app.artifactJsonPaths) {
+            for (const ajPath of app.artifactJsonPaths) {
+              const ajContent = await fetchGitHubFileContent(repoPath, ajPath, githubToken);
+              if (ajContent) {
+                const updatedAj = updateArtifactJsonWithLatestJava(JSON.parse(ajContent), rules);
+                filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
+              }
+            }
+          }
+
+          // Update project XML files
+          if (app.projectXmlPaths) {
+            for (const xmlPath of app.projectXmlPaths) {
+              const xmlContent = await fetchGitHubFileContent(repoPath, xmlPath, githubToken);
+              if (xmlContent) {
+                const updatedXml = updateProjectXml(xmlContent, rules);
+                filesToCommit.push({ path: xmlPath, content: updatedXml });
+              }
+            }
+          }
+
+          // 4. Commit all changes
+          for (const file of filesToCommit) {
+            const fileRes = await axios.get(
+              `https://api.github.com/repos/${repoPath}/contents/${file.path}?ref=${app.branch}`,
               { headers: { Authorization: `token ${githubToken}` } }
             );
-            const pomSha = pomRes.data.sha;
-            const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
-            const updatedPom = updatePomXmlWithLatestVersions(pomXml, app.dependencies);
+            const fileSha = fileRes.data.sha;
+
             await axios.put(
-              `https://api.github.com/repos/${repoPath}/contents/${normPomPath}`,
+              `https://api.github.com/repos/${repoPath}/contents/${file.path}`,
               {
-                message: 'Mule migration: update dependencies for CloudHub 2.0',
-                content: btoa(updatedPom),
+                message: `Mule migration: update ${file.path} for CloudHub 2.0 with rules priority`,
+                content: btoa(file.content),
                 branch: newBranch,
-                sha: pomSha
+                sha: fileSha
               },
               { headers: { Authorization: `token ${githubToken}` } }
             );
           }
-          // 4. Update all mule-artifact.json files
-          for (const ajPath of app.artifactJsonPaths) {
-            const normAjPath = normalizePath(ajPath);
-            // console.log('Attempting to fetch/update mule-artifact.json:', normAjPath, 'on branch', newBranch);
-            const ajRes = await axios.get(
-              `https://api.github.com/repos/${repoPath}/contents/${normAjPath}`,
-              { headers: { Authorization: `token ${githubToken}` } }
-            );
-            const ajSha = ajRes.data.sha;
-            const ajJson = JSON.parse(atob(ajRes.data.content.replace(/\n/g, '')));
-            const updatedAj = updateArtifactJsonWithLatestJava(ajJson);
-            await axios.put(
-              `https://api.github.com/repos/${repoPath}/contents/${normAjPath}`,
-              {
-                message: 'Mule migration: update Java version for CloudHub 2.0',
-                content: btoa(JSON.stringify(updatedAj, null, 2)),
-                branch: newBranch,
-                sha: ajSha
-              },
-              { headers: { Authorization: `token ${githubToken}` } }
-            );
-          }
-          // 5. Update all src/main/*.xml files
-          for (const xmlPath of app.projectXmlPaths) {
-            const normXmlPath = normalizePath(xmlPath);
-            // console.log('Attempting to fetch/update project xml:', normXmlPath, 'on branch', newBranch);
-            const xmlRes = await axios.get(
-              `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}`,
-              { headers: { Authorization: `token ${githubToken}` } }
-            );
-            const xmlSha = xmlRes.data.sha;
-            const xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
-            const updatedXml = updateProjectXml(xmlContent);
-            await axios.put(
-              `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}`,
-              {
-                message: 'Mule migration: update for CloudHub 2.0',
-                content: btoa(updatedXml),
-                branch: newBranch,
-                sha: xmlSha
-              },
-              { headers: { Authorization: `token ${githubToken}` } }
-            );
-          }
+
+          // Update application status
+          setApplications(prev => prev.map(a => 
+            a.id === app.id 
+              ? { ...a, status: 'completed', lastUpdated: new Date().toISOString() }
+              : a
+          ));
+
         } else if (repositoryType === 'azure_devops') {
-          await migrateAzureApplication(app);
+          const urlParts = app.repository.split('/');
+          const organization = urlParts[3];
+          const project = urlParts[4];
+          const repoId = app.id;
+          const azureApi = createAzureDevOpsAPI(organization, azureToken);
+
+          // Create migration branch
+          const branchCreated = await azureApi.createBranch(project, repoId, 'mulemigration', app.branch);
+          if (!branchCreated) {
+            throw new Error('Failed to create migration branch');
+          }
+
+          const filesToCommit = [];
+
+          // Update POM files
+          if (app.pomPaths) {
+            for (const pomPath of app.pomPaths) {
+              const pomContent = await azureApi.getFileContent(project, repoId, pomPath);
+              if (pomContent) {
+                const updatedPom = updatePomXmlWithLatestVersions(pomContent, app.dependencies, rules);
+                filesToCommit.push({ path: pomPath, content: updatedPom });
+              }
+            }
+          }
+
+          // Update artifact JSON files
+          if (app.artifactJsonPaths) {
+            for (const ajPath of app.artifactJsonPaths) {
+              const ajContent = await azureApi.getFileContent(project, repoId, ajPath);
+              if (ajContent) {
+                const updatedAj = updateArtifactJsonWithLatestJava(JSON.parse(ajContent), rules);
+                filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
+              }
+            }
+          }
+
+          // Update project XML files
+          if (app.projectXmlPaths) {
+            for (const xmlPath of app.projectXmlPaths) {
+              const xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
+              if (xmlContent) {
+                const updatedXml = updateProjectXml(xmlContent, rules);
+                filesToCommit.push({ path: xmlPath, content: updatedXml });
+              }
+            }
+          }
+
+          // Commit all changes
+          if (filesToCommit.length > 0) {
+            const committed = await azureApi.commitFiles(
+              project,
+              repoId,
+              'mulemigration',
+              filesToCommit,
+              'Mule migration: update files for CloudHub 2.0 with rules priority'
+            );
+            if (!committed) {
+              throw new Error('Failed to commit migration changes');
+            }
+          }
+
+          // Update application status
+          setApplications(prev => prev.map(a => 
+            a.id === app.id 
+              ? { ...a, status: 'completed', lastUpdated: new Date().toISOString() }
+              : a
+          ));
         }
       }
-      toast.success('Migration branch created and all files updated for selected apps!');
-    } catch (err) {
-      toast.error('Migration failed. Please check your token and repo permissions.');
+      toast.success('Migration completed successfully!');
+    } catch (error) {
+      console.error('Migration error:', error);
+      toast.error('Migration failed. Please try again.');
     } finally {
       setMigrating(false);
     }
   };
 
-  const getStatusColor = (status: MuleApplication['status']) => {
+  // Keep only the new versions of update functions
+  const updatePomXmlWithLatestVersions = (pomXml: string, dependencies: MuleDependency[], rules: MigrationRules): string => {
+    let updatedPom = pomXml;
+
+    // Update app.runtime version
+    updatedPom = updatedPom.replace(
+      /<app\.runtime>.*?<\/app\.runtime>/g,
+      `<app.runtime>${rules.muleVersion}</app.runtime>`
+    );
+
+    // Update dependencies
+    dependencies.forEach(dep => {
+      const ruleVersion = rules.dependencyVersions.find(d => d.artifactId === dep.artifactId)?.version;
+      if (ruleVersion) {
+        const dependencyRegex = new RegExp(
+          `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
+          'g'
+        );
+        updatedPom = updatedPom.replace(dependencyRegex, `$1${ruleVersion}$2`);
+      }
+    });
+
+    return updatedPom;
+  };
+
+  const updateArtifactJsonWithLatestJava = (artifactJson: any, rules: MigrationRules): any => {
+    const updatedJson = { ...artifactJson };
+    updatedJson.javaSpecificationVersions = [rules.javaVersion];
+    updatedJson.minMuleVersion = rules.minMuleVersion;
+    return updatedJson;
+  };
+
+  const updateProjectXml = (xml: string, rules: MigrationRules): string => {
+    let updatedXml = xml;
+
+    // Replace connectors based on rules
+    rules.connectorReplacements.forEach(replacement => {
+      const pattern = new RegExp(`<${replacement.from}:[^>]*>.*?</${replacement.from}:[^>]*>`, 'g');
+      updatedXml = updatedXml.replace(pattern, `<${replacement.to}:log level="INFO" message="Replaced ${replacement.from} with ${replacement.to} for CloudHub 2.0 migration" />`);
+    });
+
+    return updatedXml;
+  };
+
+  const getStatusColor = (status: MuleApplication['status']): 'default' | 'destructive' | 'outline' | 'secondary' => {
     switch (status) {
       case 'completed':
-        return 'text-green-500';
+        return 'default';
       case 'in_progress':
-        return 'text-yellow-500';
+        return 'secondary';
       case 'failed':
-        return 'text-red-500';
+        return 'destructive';
       default:
-        return 'text-gray-500';
+        return 'outline';
     }
   };
 
@@ -735,196 +808,160 @@ const Migration = () => {
   };
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex justify-between items-center mb-6">
-      <div>
-          <h1 className="text-3xl font-bold text-gray-900">Mule Application Migration</h1>
-        <p className="text-gray-600 mt-1">
-            Scan your repositories and migrate Mule applications to CloudHub 2.0
-        </p>
-        </div>
-        <Button onClick={handleFetchRepositories} disabled={fetchingRepos}>
-          <RefreshCw className={`h-4 w-4 mr-2 ${fetchingRepos ? 'animate-spin' : ''}`} />
-          {fetchingRepos ? 'Scanning...' : 'Fetch Mule Applications'}
-        </Button>
-      </div>
-      {error && (
-        <div className="text-red-600 mb-4">{error}</div>
-      )}
+    <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>Mule Applications</CardTitle>
+          <CardTitle>Migration</CardTitle>
           <CardDescription>
-            View and select Mule applications for migration
+            Select applications to migrate to CloudHub 2.0
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {fetchingRepos ? (
-            <div className="flex items-center justify-center h-32">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+          <div className="space-y-4">
+            {repositoryType === 'github' ? (
+              <div className="flex items-center space-x-2">
+                <Input
+                  type="password"
+                  placeholder="GitHub Personal Access Token"
+                  value={githubToken}
+                  onChange={(e) => setGithubToken(e.target.value)}
+                />
+                <Button
+                  onClick={handleConnectGithub}
+                  disabled={!githubToken || connecting === 'github'}
+                >
+                  {connecting === 'github' ? (
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Github className="mr-2 h-4 w-4" />
+                  )}
+                  Connect GitHub
+                </Button>
+              </div>
+            ) : repositoryType === 'azure_devops' ? (
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <Input
+                    type="text"
+                    placeholder="Azure DevOps Organization URL"
+                    value={azureOrgUrl}
+                    onChange={(e) => setAzureOrgUrl(e.target.value)}
+                  />
+                  <Input
+                    type="password"
+                    placeholder="Azure DevOps Personal Access Token"
+                    value={azureToken}
+                    onChange={(e) => setAzureToken(e.target.value)}
+                  />
+                  <Button
+                    onClick={handleConnectAzure}
+                    disabled={!azureToken || !azureOrgUrl || connecting === 'azure'}
+                  >
+                    {connecting === 'azure' ? (
+                      <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <GitBranch className="mr-2 h-4 w-4" />
+                    )}
+                    Connect Azure DevOps
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="flex justify-between items-center">
+              <Button
+                onClick={handleFetchRepositories}
+                disabled={fetchingRepos || !(githubToken || azureToken)}
+              >
+                {fetchingRepos ? (
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Fetch Repositories
+              </Button>
+
+              <Button
+                onClick={() => handleMigrateSelected({
+                  javaVersion: '17',
+                  muleVersion: '4.4.0',
+                  minMuleVersion: '4.4.0',
+                  connectorReplacements: [],
+                  dependencyVersions: []
+                })}
+                disabled={migrating || applications.filter(app => app.selected).length === 0}
+              >
+                {migrating ? (
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <GitBranch className="mr-2 h-4 w-4" />
+                )}
+                Migrate Selected
+              </Button>
             </div>
-          ) : applications.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-gray-500">No Mule applications found. Click 'Fetch Mule Applications' to scan.</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table className="min-w-[1400px] border border-gray-300 border-collapse">
+
+            {error && (
+              <div className="text-red-500 text-sm">{error}</div>
+            )}
+
+            {applications.length > 0 && (
+              <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[50px] border border-gray-300">Select</TableHead>
-                    <TableHead className="border border-gray-300">Application</TableHead>
-                    <TableHead className="border border-gray-300">Repository</TableHead>
-                    <TableHead className="border border-gray-300">Mule Version</TableHead>
-                    <TableHead className="border border-gray-300">Java Version</TableHead>
-                    <TableHead className="border border-gray-300">Dependencies</TableHead>
-                    <TableHead className="border border-gray-300">Connectors</TableHead>
-                    <TableHead className="border border-gray-300">Artifact JSON</TableHead>
-                    <TableHead className="border border-gray-300">Latest Version</TableHead>
-                    <TableHead className="border border-gray-300">Status</TableHead>
+                    <TableHead>Select</TableHead>
+                    <TableHead>Application</TableHead>
+                    <TableHead>Repository</TableHead>
+                    <TableHead>Branch</TableHead>
+                    <TableHead>Mule Version</TableHead>
+                    <TableHead>Java Version</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Last Updated</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {applications.map((app) => (
                     <TableRow key={app.id}>
-                      <TableCell className="border border-gray-300">
+                      <TableCell>
                         <input
                           type="checkbox"
-                          checked={!!app.selected}
+                          checked={app.selected}
                           onChange={() => toggleApplicationSelection(app.id)}
                         />
                       </TableCell>
-                      <TableCell className="border border-gray-300">{app.applicationName}</TableCell>
-                      <TableCell className="border border-gray-300">
-                        <a href={app.repository} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                          {repositoryType === 'github' 
-                            ? app.repository.split('/').slice(-2).join('/')
-                            : app.repository.split('/').slice(-1)[0]}
+                      <TableCell>{app.applicationName}</TableCell>
+                      <TableCell>
+                        <a
+                          href={app.repository}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-500 hover:underline"
+                        >
+                          {app.name}
                         </a>
                       </TableCell>
-                      <TableCell className="border border-gray-300">
-                        {app.muleVersion}
-                        <div className="text-xs text-gray-500">Latest: {getLatestMuleVersion()}</div>
-                      </TableCell>
-                      <TableCell className="border border-gray-300">
-                        {app.javaVersion}
-                        <div className="text-xs text-gray-500">Latest: {getLatestJavaVersion()}</div>
-                      </TableCell>
-                      <TableCell className="border border-gray-300">
-                        <div className="space-y-1">
-                          {app.dependencies.slice(0, 3).map((dep, index) => (
-                            <div key={index} className="flex items-center space-x-2">
-                              <span className="text-sm">{dep.artifactId}</span>
-                              <Badge variant={dep.isDeprecated ? "destructive" : "secondary"} className="text-xs">
-                                {dep.version}
-                              </Badge>
-                              {dep.isDeprecated && dep.replacement && (
-                                <Badge variant="outline" className="text-yellow-600 text-xs">
-                                  Replace with {dep.replacement}
-                                </Badge>
-                              )}
-                              <span className="text-xs text-gray-500">Latest: {dep.latestVersion}</span>
-                            </div>
-                          ))}
-                          {app.dependencies.length > 3 && (
-                            <div className="text-xs text-gray-500">
-                              +{app.dependencies.length - 3} more
-                      </div>
-                          )}
-                    </div>
-                      </TableCell>
-                      <TableCell className="border border-gray-300">
-                        <div className="space-y-1">
-                          {app.connectors.slice(0, 3).map((conn, index) => (
-                            <div key={index} className="flex items-center space-x-2">
-                              <span className="text-sm">{conn.artifactId}</span>
-                              <Badge variant={conn.isDeprecated ? "destructive" : "secondary"} className="text-xs">
-                                {conn.version}
-                              </Badge>
-                              {conn.isDeprecated && conn.replacement && (
-                                <Badge variant="outline" className="text-yellow-600 text-xs">
-                                  Replace with {conn.replacement}
-                                </Badge>
-                              )}
-                    </div>
-                          ))}
-                          {app.connectors.length > 3 && (
-                            <div className="text-xs text-gray-500">
-                              +{app.connectors.length - 3} more
-                  </div>
-                          )}
-                    </div>
-                      </TableCell>
-                      <TableCell className="border border-gray-300">
-                        {app.artifactJson && (
-                          <div className="space-y-1">
-                            {Object.entries(app.artifactJson).slice(0, 3).map(([key, value], index) => (
-                              <div key={index} className="flex items-center space-x-2">
-                                <span className="text-sm">{key}</span>
-                                <Badge variant="secondary" className="text-xs">
-                                  {String(value)}
-                                </Badge>
-                    </div>
-                            ))}
-                            {Object.entries(app.artifactJson).length > 3 && (
-                              <div className="text-xs text-gray-500">
-                                +{Object.entries(app.artifactJson).length - 3} more
-                    </div>
-                            )}
-                  </div>
-                        )}
-                      </TableCell>
-                      <TableCell className="border border-gray-300">
-                        <div className="space-y-1">
-                          <div className="text-xs">Mule: {getLatestMuleVersion()}</div>
-                          <div className="text-xs">Java: {getLatestJavaVersion()}</div>
-                          {app.dependencies.map(dep => (
-                            <div key={dep.artifactId} className="text-xs">
-                              {dep.artifactId}: {dep.latestVersion}
-                </div>
-              ))}
-            </div>
-                      </TableCell>
-                      <TableCell className="border border-gray-300">
-                        <div className="flex items-center space-x-2">
+                      <TableCell>{app.branch}</TableCell>
+                      <TableCell>{app.muleVersion}</TableCell>
+                      <TableCell>{app.javaVersion}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={getStatusColor(app.status)}
+                          className="flex items-center space-x-1"
+                        >
                           {getStatusIcon(app.status)}
-                          <span className={getStatusColor(app.status)}>
-                            {app.status.replace('_', ' ')}
-                          </span>
-                </div>
+                          <span>{app.status}</span>
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {new Date(app.lastUpdated).toLocaleDateString()}
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
-            </div>
-          )}
-          </CardContent>
-        </Card>
-      <div className="flex justify-end mt-4">
-        <Button
-          onClick={handleMigrateSelected}
-          disabled={!applications.some(app => app.selected) || migrating}
-        >
-          {migrating ? 'Migrating...' : 'Migrate Selected'}
-        </Button>
-      </div>
-      <div className="flex justify-between mt-4">
-        <Button
-          onClick={handleConnectGithub}
-          disabled={connecting === 'github'}
-          className="w-full"
-        >
-          {connecting === 'github' ? 'Connecting...' : selectedOrganization?.github_token ? 'Connected' : 'Connect GitHub'}
-        </Button>
-        <Button
-          onClick={handleConnectAzure}
-          disabled={connecting === 'azure'}
-          className="w-full"
-        >
-          {connecting === 'azure' ? 'Connecting...' : selectedOrganization?.azure_devops_token ? 'Connected' : 'Connect Azure DevOps'}
-        </Button>
-      </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 };

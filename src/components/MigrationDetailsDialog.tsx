@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -165,183 +164,177 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center space-x-2">
-            <span>{application.applicationName}</span>
-            <a 
-              href={application.repository} 
-              target="_blank" 
-              rel="noopener noreferrer" 
-              className="text-blue-600 hover:underline"
-            >
-              <ExternalLink className="h-4 w-4" />
-            </a>
-          </DialogTitle>
+          <DialogTitle>Migration Details: {application?.applicationName}</DialogTitle>
           <DialogDescription>
-            Select the components you want to migrate for CloudHub 2.0 compatibility
+            Select components to migrate to CloudHub 2.0
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6">
-          {/* Action Buttons */}
-          <div className="flex space-x-2">
-            <Button variant="outline" size="sm" onClick={handleSelectAll}>
-              Select All
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleDeselectAll}>
-              Deselect All
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleSaveSelections} className="flex items-center space-x-1">
-              <Save className="h-4 w-4" />
-              <span>Save Selections</span>
-            </Button>
-          </div>
-
-          {/* Runtime Configuration */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold">Runtime Configuration</h3>
-            
-            <div className="flex items-center space-x-3 p-3 border rounded-lg">
-              <Checkbox
-                checked={selections.muleRuntime}
-                onCheckedChange={(checked) => setSelections(prev => ({ ...prev, muleRuntime: checked as boolean }))}
-              />
-              <div className="flex-1">
-                <div className="font-medium">Mule Runtime</div>
-                <div className="text-sm text-gray-600">
-                  Current: {application.muleRuntime} → Latest: {getLatestMuleVersion()}
-                </div>
-              </div>
-              {application.muleRuntime !== getLatestMuleVersion() && (
-                <Badge variant="outline" className="text-yellow-600">Update Available</Badge>
-              )}
-            </div>
-
-            <div className="flex items-center space-x-3 p-3 border rounded-lg">
-              <Checkbox
-                checked={selections.javaVersion}
-                onCheckedChange={(checked) => setSelections(prev => ({ ...prev, javaVersion: checked as boolean }))}
-              />
-              <div className="flex-1">
-                <div className="font-medium">Java Version (mule-artifact.json)</div>
-                <div className="text-sm text-gray-600">
-                  Current: {application.javaVersion} → Latest: {getLatestJavaVersion()}
-                </div>
-              </div>
-              {application.javaVersion !== getLatestJavaVersion() && (
-                <Badge variant="outline" className="text-yellow-600">Update Available</Badge>
-              )}
-            </div>
-
-            <div className="flex items-center space-x-3 p-3 border rounded-lg">
-              <Checkbox
-                checked={selections.minMuleVersion}
-                onCheckedChange={(checked) => setSelections(prev => ({ ...prev, minMuleVersion: checked as boolean }))}
-              />
-              <div className="flex-1">
-                <div className="font-medium">MinMuleVersion (mule-artifact.json)</div>
-                <div className="text-sm text-gray-600">
-                  Sync with Mule Runtime: {getLatestMuleVersion()}
-                </div>
-              </div>
-              <Badge variant="outline" className="text-blue-600">Sync Required</Badge>
-            </div>
-          </div>
-
-          {/* Dependencies */}
-          {application.dependencies.length > 0 && (
+        {application && (
+          <div className="space-y-6">
+            {/* Runtime Updates */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Dependencies ({application.dependencies.length})</h3>
-              <div className="space-y-2 max-h-60 overflow-y-auto">
-                {application.dependencies.map(dep => (
-                  <div key={dep.artifactId} className="flex items-center space-x-3 p-3 border rounded-lg">
-                    <Checkbox
-                      checked={selections.dependencies.includes(dep.artifactId)}
-                      onCheckedChange={() => handleDependencyToggle(dep.artifactId)}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">{dep.artifactId}</div>
-                      <div className="text-sm text-gray-600">
-                        {dep.groupId}
+              <div className="flex justify-between items-center">
+                <div className="flex-1">
+                  <div className="font-medium">Mule Runtime</div>
+                  <div className="text-sm text-gray-600">
+                    Current: {application.muleRuntime} → Latest: <span className="font-bold text-blue-600">{getLatestMuleVersion()}</span>
+                  </div>
+                </div>
+                {application.muleRuntime !== getLatestMuleVersion() && (
+                  <Badge variant="outline" className="text-yellow-600">Update Available</Badge>
+                )}
+              </div>
+
+              <div className="flex justify-between items-center">
+                <div className="flex-1">
+                  <div className="font-medium">Java Version (mule-artifact.json)</div>
+                  <div className="text-sm text-gray-600">
+                    Current: {application.javaVersion} → Latest: <span className="font-bold text-blue-600">{getLatestJavaVersion()}</span>
+                  </div>
+                </div>
+                {application.javaVersion !== getLatestJavaVersion() && (
+                  <Badge variant="outline" className="text-yellow-600">Update Available</Badge>
+                )}
+              </div>
+
+              <div className="flex justify-between items-center">
+                <div className="flex-1">
+                  <div className="font-medium">MinMuleVersion (mule-artifact.json)</div>
+                  <div className="text-sm text-gray-600">
+                    Sync with Mule Runtime: <span className="font-bold text-blue-600">{getLatestMuleVersion()}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Dependencies */}
+            {application.dependencies.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <div className="font-medium">Dependencies</div>
+                  <div className="flex space-x-2">
+                    <Button variant="outline" size="sm" onClick={handleSelectAll}>
+                      Select All
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={handleDeselectAll}>
+                      Deselect All
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {application.dependencies.map(dep => (
+                    <div key={dep.artifactId} className="flex items-center space-x-3 p-3 border rounded-lg">
+                      <Checkbox
+                        checked={selections.dependencies.includes(dep.artifactId)}
+                        onCheckedChange={(checked) => handleDependencyToggle(dep.artifactId)}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{dep.artifactId}</div>
+                        <div className="text-sm text-gray-600">
+                          {dep.groupId}
+                        </div>
+                        <div className="text-sm">
+                          Current: {dep.version} → Latest: <span className="font-bold text-blue-600">{dep.latestVersion}</span>
+                        </div>
                       </div>
-                      <div className="text-sm">
-                        Current: {dep.version} → Latest: {dep.latestVersion}
+                      <div className="flex flex-col space-y-1">
+                        {dep.version !== dep.latestVersion && (
+                          <Badge variant="outline" className="text-yellow-600 text-xs">Update Available</Badge>
+                        )}
+                        {dep.isDeprecated && (
+                          <Badge variant="destructive" className="text-xs">Deprecated</Badge>
+                        )}
+                        {dep.replacement && (
+                          <Badge variant="secondary" className="text-xs">Replace: {dep.replacement}</Badge>
+                        )}
                       </div>
                     </div>
-                    <div className="flex flex-col space-y-1">
-                      {dep.version !== dep.latestVersion && (
-                        <Badge variant="outline" className="text-yellow-600 text-xs">Update Available</Badge>
-                      )}
-                      {dep.isDeprecated && (
-                        <Badge variant="destructive" className="text-xs">Deprecated</Badge>
-                      )}
-                      {dep.replacement && (
-                        <Badge variant="secondary" className="text-xs">Replace: {dep.replacement}</Badge>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Connectors */}
-          {application.connectors.length > 0 && (
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Connectors ({application.connectors.length})</h3>
-              <div className="space-y-2 max-h-60 overflow-y-auto">
-                {application.connectors.map(conn => (
-                  <div key={conn.name} className="flex items-center space-x-3 p-3 border rounded-lg">
-                    <Checkbox
-                      checked={selections.connectors.includes(conn.name)}
-                      onCheckedChange={() => handleConnectorToggle(conn.name)}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium">{conn.name}</div>
-                      <div className="text-sm text-gray-600 truncate">{conn.namespace}</div>
+            {/* Regular Connectors */}
+            {application.connectors.filter(conn => !conn.isDeprecated).length > 0 && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <div className="font-medium">Connectors</div>
+                </div>
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {application.connectors.filter(conn => !conn.isDeprecated).map(conn => (
+                    <div key={conn.name} className="flex items-center space-x-3 p-3 border rounded-lg">
+                      <Checkbox
+                        checked={selections.connectors.includes(conn.name)}
+                        onCheckedChange={(checked) => handleConnectorToggle(conn.name)}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{conn.name}</div>
+                        <div className="text-sm text-gray-600 truncate">{conn.namespace}</div>
+                      </div>
+                      <div className="flex flex-col space-y-1">
+                        {conn.cloudHub2Alternative && (
+                          <Badge variant="outline" className="text-blue-600 text-xs">
+                            CloudHub 2.0: {conn.cloudHub2Alternative}
+                          </Badge>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex flex-col space-y-1">
-                      {conn.isDeprecated && (
-                        <Badge variant="destructive" className="text-xs">Deprecated</Badge>
-                      )}
-                      {conn.cloudHub2Alternative && (
-                        <Badge variant="outline" className="text-blue-600 text-xs">
-                          CloudHub 2.0: {conn.cloudHub2Alternative}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Migration Actions */}
-          <div className="flex justify-between items-center pt-4 border-t">
-            <div className="flex items-center space-x-2">
-              {hasSelections ? (
-                <CheckCircle2 className="h-5 w-5 text-green-500" />
-              ) : (
-                <AlertTriangle className="h-5 w-5 text-yellow-500" />
-              )}
-              <span className="text-sm text-gray-600">
-                {hasSelections ? 'Ready to migrate selected items' : 'No items selected for migration'}
-              </span>
-            </div>
-            <div className="flex space-x-2">
-              <Button variant="outline" onClick={onClose}>
-                Cancel
+            {/* Deprecated Connectors - Separate Section */}
+            {application.connectors.filter(conn => conn.isDeprecated).length > 0 && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center pt-4 border-t">
+                  <div className="flex items-center space-x-2">
+                    <Badge variant="destructive">Deprecated Connectors (Action Required)</Badge>
+                  </div>
+                </div>
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {application.connectors.filter(conn => conn.isDeprecated).map(conn => (
+                    <div key={conn.name} className="flex items-center space-x-3 p-3 border rounded-lg bg-red-50">
+                      <Checkbox
+                        checked={selections.connectors.includes(conn.name)}
+                        onCheckedChange={(checked) => handleConnectorToggle(conn.name)}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{conn.name}</div>
+                        <div className="text-sm text-gray-600 truncate">{conn.namespace}</div>
+                      </div>
+                      <div className="flex flex-col space-y-1">
+                        <Badge variant="destructive" className="text-xs">Deprecated</Badge>
+                        {conn.cloudHub2Alternative && (
+                          <Badge variant="outline" className="text-blue-600 text-xs">
+                            CloudHub 2.0: {conn.cloudHub2Alternative}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Migration Actions */}
+            <div className="flex justify-end space-x-2 pt-4 border-t">
+              <Button variant="outline" onClick={handleSaveSelections}>
+                Save Selections
               </Button>
               <Button 
-                onClick={handleMigrate} 
-                disabled={!hasSelections || migrating}
+                onClick={handleMigrate}
+                disabled={migrating || !hasSelections}
+                className="bg-blue-600 hover:bg-blue-700"
               >
-                {migrating ? 'Migrating...' : 'Migrate Selected'}
+                {migrating ? 'Migrating...' : 'Start Migration'}
               </Button>
             </div>
           </div>
-        </div>
+        )}
       </DialogContent>
     </Dialog>
   );
