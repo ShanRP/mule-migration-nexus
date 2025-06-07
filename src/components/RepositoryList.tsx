@@ -111,6 +111,12 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     setApplications(prev => prev.map(app => ({ ...app, selected: false })));
   };
 
+  // Function to save rules configuration
+  const handleSaveRules = (rules: MigrationRules) => {
+    setMigrationRules(rules);
+    console.log('Migration rules updated:', rules);
+  };
+
   // Function to save selections for an application
   const handleSaveSelections = (app: MuleApplication, selections: MigrationSelections) => {
     setApplications(prev => prev.map(a => 
