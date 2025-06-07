@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -96,55 +95,76 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[], selections: MigrationSelections): string => {
     let updatedPom = pomXml;
     
+    console.log('Starting POM update with selections:', selections);
+    console.log('Dependencies to process:', dependencies.length);
+    
     // Update app.runtime version if selected
     if (selections.muleRuntime) {
       const latestMuleVersion = getLatestMuleVersion();
-      updatedPom = updatedPom.replace(
-        /<app\.runtime>.*?<\/app\.runtime>/g,
-        `<app.runtime>${latestMuleVersion}</app.runtime>`
-      );
-      console.log(`Updated app.runtime to ${latestMuleVersion}`);
+      const runtimeRegex = /<app\.runtime>.*?<\/app\.runtime>/g;
+      if (runtimeRegex.test(updatedPom)) {
+        updatedPom = updatedPom.replace(runtimeRegex, `<app.runtime>${latestMuleVersion}</app.runtime>`);
+        console.log(`Updated app.runtime to ${latestMuleVersion}`);
+      }
     }
     
-    // Remove CloudHub dependencies
-    const cloudHubDepPatterns = [
-      /<dependency>\s*<groupId>org\.mule\.modules<\/groupId>\s*<artifactId>mule-module-cloudhub<\/artifactId>[\s\S]*?<\/dependency>/g,
-      /<dependency>\s*<groupId>org\.mule\.connectors<\/groupId>\s*<artifactId>mule-cloudhub-connector<\/artifactId>[\s\S]*?<\/dependency>/g,
-      /<dependency>[\s\S]*?<artifactId>[^<]*cloudhub[^<]*<\/artifactId>[\s\S]*?<\/dependency>/g,
-      /<dependency>\s*<groupId>com\.mulesoft\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g,
-      /<dependency>\s*<groupId>com\.mulesoft\.modules\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g
-    ];
+    // Remove only CloudHub dependencies that are selected for replacement
+    const selectedCloudHubConnectors = selections.connectors.filter(name => 
+      name.toLowerCase().includes('cloudhub')
+    );
     
-    cloudHubDepPatterns.forEach(pattern => {
-      const matches = updatedPom.match(pattern);
-      if (matches) {
-        // console.log('Found CloudHub dependencies to remove:', matches);
-        updatedPom = updatedPom.replace(pattern, '');
-      }
-    });
+    if (selectedCloudHubConnectors.length > 0) {
+      console.log('Removing selected CloudHub dependencies...');
+      const cloudHubDepPatterns = [
+        /<dependency>\s*<groupId>org\.mule\.modules<\/groupId>\s*<artifactId>mule-module-cloudhub<\/artifactId>[\s\S]*?<\/dependency>/g,
+        /<dependency>\s*<groupId>org\.mule\.connectors<\/groupId>\s*<artifactId>mule-cloudhub-connector<\/artifactId>[\s\S]*?<\/dependency>/g,
+        /<dependency>[\s\S]*?<artifactId>[^<]*cloudhub[^<]*<\/artifactId>[\s\S]*?<\/dependency>/g,
+        /<dependency>\s*<groupId>com\.mulesoft\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g,
+        /<dependency>\s*<groupId>com\.mulesoft\.modules\.cloudhub<\/groupId>[\s\S]*?<\/dependency>/g
+      ];
+      
+      cloudHubDepPatterns.forEach(pattern => {
+        const matches = updatedPom.match(pattern);
+        if (matches) {
+          console.log('Found CloudHub dependencies to remove:', matches.length);
+          updatedPom = updatedPom.replace(pattern, '');
+        }
+      });
+    }
     
-    // Update selected dependencies to their latest versions
+    // Update only selected dependencies to their latest versions (DO NOT remove unselected ones)
     dependencies.forEach(dep => {
       if (selections.dependencies.includes(dep.artifactId) && dep.latestVersion && dep.latestVersion !== dep.version) {
-        // console.log(`Updating ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
+        console.log(`Updating selected dependency ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
         
+        // Create a more specific regex that matches the exact dependency
         const dependencyRegex = new RegExp(
-          `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
+          `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>)([^<]+)(<\\/version>[\\s\\S]*?<\\/dependency>)`,
           'g'
         );
         
-        updatedPom = updatedPom.replace(dependencyRegex, `$1${dep.latestVersion}$2`);
+        const beforeUpdate = updatedPom;
+        updatedPom = updatedPom.replace(dependencyRegex, `$1${dep.latestVersion}$3`);
+        
+        if (beforeUpdate !== updatedPom) {
+          console.log(`Successfully updated ${dep.artifactId} version`);
+        } else {
+          console.log(`No changes made for ${dep.artifactId} - dependency may not be found in expected format`);
+        }
+      } else if (!selections.dependencies.includes(dep.artifactId)) {
+        console.log(`Skipping unselected dependency: ${dep.artifactId}`);
       }
     });
     
-    // Clean up any double empty lines
+    // Clean up any double empty lines but preserve structure
     updatedPom = updatedPom.replace(/\n\s*\n\s*\n/g, '\n\n');
     
-    // Add migration comment
-    if (!updatedPom.includes('<!-- Updated for CloudHub 2.0 migration -->')) {
+    // Add migration comment only if changes were made
+    if (updatedPom !== pomXml && !updatedPom.includes('<!-- Updated for CloudHub 2.0 migration -->')) {
       updatedPom = updatedPom + '\n<!-- Updated for CloudHub 2.0 migration -->';
     }
     
+    console.log('POM update completed');
     return updatedPom;
   };
 
@@ -152,27 +172,37 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   const replaceCloudHubConnectors = (xmlContent: string, selections: MigrationSelections): string => {
     let updatedXml = xmlContent;
     
-    // Only process selected connectors
+    console.log('Processing XML for CloudHub connector replacement...');
+    console.log('Selected connectors for replacement:', selections.connectors);
+    
+    // Only process selected CloudHub connectors
     const selectedCloudHubConnectors = selections.connectors.filter(name => 
       name.toLowerCase().includes('cloudhub')
     );
     
     if (selectedCloudHubConnectors.length === 0) {
+      console.log('No CloudHub connectors selected for replacement');
       return xmlContent;
     }
     
-    // console.log('Replacing selected CloudHub connectors with Logger connectors...');
+    console.log('Replacing selected CloudHub connectors with Logger connectors...');
     
-    // Add Logger namespace if not present
-    if (!updatedXml.includes('xmlns:logger=')) {
-      const muleTag = updatedXml.match(/<mule[^>]*>/);
-      if (muleTag) {
-        const updatedMuleTag = muleTag[0].replace('>', ' xmlns:logger="http://www.mulesoft.org/schema/mule/logger" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/logger http://www.mulesoft.org/schema/mule/logger/current/mule-logger.xsd">');
-        updatedXml = updatedXml.replace(muleTag[0], updatedMuleTag);
+    // Add Logger namespace if not present and CloudHub operations are found
+    const hasCloudHubOperations = /<cloudhub:/.test(updatedXml);
+    if (hasCloudHubOperations && !updatedXml.includes('xmlns:logger=')) {
+      console.log('Adding Logger namespace...');
+      // Find the mule root element and add logger namespace
+      const muleTagRegex = /(<mule[^>]*)(>)/;
+      const muleMatch = updatedXml.match(muleTagRegex);
+      if (muleMatch) {
+        const muleTag = muleMatch[0];
+        const updatedMuleTag = muleTag.replace('>', ' xmlns:logger="http://www.mulesoft.org/schema/mule/logger" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/logger http://www.mulesoft.org/schema/mule/logger/current/mule-logger.xsd">');
+        updatedXml = updatedXml.replace(muleTag, updatedMuleTag);
+        console.log('Added Logger namespace to mule root element');
       }
     }
     
-    // Replace CloudHub connectors with Logger
+    // Replace CloudHub operations with Logger operations
     const cloudHubPatterns = [
       {
         pattern: /<cloudhub:create-notification[^>]*>[\s\S]*?<\/cloudhub:create-notification>/g,
@@ -199,7 +229,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         replacement: '<logger:log level="INFO" message="CloudHub get application replaced with logger for CloudHub 2.0 migration" />'
       },
       {
-        pattern: /<cloudhub:[^>]*>[\s\S]*?<\/cloudhub:[^>]*>/g,
+        pattern: /<cloudhub:([^>\s]+)[^>]*>[\s\S]*?<\/cloudhub:\1>/g,
         replacement: '<logger:log level="INFO" message="CloudHub operation replaced with logger for CloudHub 2.0 migration" />'
       },
       {
@@ -208,26 +238,35 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       }
     ];
     
+    let replacementsMade = 0;
     cloudHubPatterns.forEach(({ pattern, replacement }) => {
       const matches = updatedXml.match(pattern);
       if (matches) {
-        console.log('Found CloudHub connectors to replace:', matches);
+        console.log(`Found ${matches.length} CloudHub operations to replace with pattern: ${pattern}`);
         updatedXml = updatedXml.replace(pattern, replacement);
+        replacementsMade += matches.length;
       }
     });
     
+    console.log(`Total CloudHub operations replaced: ${replacementsMade}`);
+    
     // Remove CloudHub namespace if no more CloudHub elements exist
-    if (!/<cloudhub:/.test(updatedXml)) {
+    if (replacementsMade > 0 && !/<cloudhub:/.test(updatedXml)) {
+      console.log('Removing CloudHub namespace as no more CloudHub elements exist');
       updatedXml = updatedXml.replace(/xmlns:cloudhub="[^"]*"\s*/g, '');
       updatedXml = updatedXml.replace(/http:\/\/www\.mulesoft\.org\/schema\/mule\/cloudhub[^\s]*/g, '');
+      // Clean up extra spaces in schema location
+      updatedXml = updatedXml.replace(/\s+/g, ' ');
     }
     
+    console.log('CloudHub connector replacement completed');
     return updatedXml;
   };
 
   // Enhanced GitHub migration function
   const migrateGitHubApplication = async (app: MuleApplication, selections: MigrationSelections) => {
-    // console.log('Starting GitHub migration for app:', app.applicationName);
+    console.log('Starting GitHub migration for app:', app.applicationName);
+    console.log('Migration selections:', selections);
     
     const repoPath = app.repository.replace('https://github.com/', '');
     const newBranch = 'mulemigration';
@@ -276,7 +315,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          // console.log('Successfully updated:', pomPath);
+          console.log('Successfully updated:', pomPath);
         } catch (error) {
           console.error(`Failed to update ${pomPath}:`, error);
         }
@@ -314,7 +353,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          // console.log('Successfully updated:', ajPath);
+          console.log('Successfully updated:', ajPath);
         } catch (error) {
           console.error(`Failed to update ${ajPath}:`, error);
         }
@@ -344,7 +383,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          // console.log('Successfully updated:', xmlPath);
+          console.log('Successfully updated:', xmlPath);
         } catch (error) {
           console.error(`Failed to update ${xmlPath}:`, error);
         }
@@ -355,8 +394,8 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   // Enhanced Azure DevOps migration function
   const migrateAzureApplication = async (app: MuleApplication, selections: MigrationSelections) => {
     try {
-      // console.log('Starting Azure DevOps migration for app:', app.applicationName);
-      // console.log('Migration selections:', selections);
+      console.log('Starting Azure DevOps migration for app:', app.applicationName);
+      console.log('Migration selections:', selections);
       
       const urlParts = app.repository.split('/');
       const organization = urlParts[3];
@@ -365,7 +404,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       const azureApi = createAzureDevOpsAPI(organization, azureToken);
       
       // Create migration branch
-      // console.log(`Creating migration branch for ${app.name}...`);
+      console.log(`Creating migration branch for ${app.name}...`);
       const branchCreated = await azureApi.createBranch(project, repoId, 'mulemigration', app.branch);
       if (!branchCreated) {
         throw new Error('Failed to create migration branch. Please check your PAT permissions.');
@@ -375,7 +414,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Update POM files if selected
       if ((selections.muleRuntime || selections.dependencies.length > 0) && app.pomPaths) {
-        // console.log(`Updating selected POM files for ${app.name}...`);
+        console.log(`Updating selected POM files for ${app.name}...`);
         for (const pomPath of app.pomPaths) {
           let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
           if (pomXml && typeof pomXml === 'string') {
@@ -387,7 +426,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Update artifact JSON files if selected
       if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
-        // console.log(`Updating selected artifact JSON files for ${app.name}...`);
+        console.log(`Updating selected artifact JSON files for ${app.name}...`);
         for (const ajPath of app.artifactJsonPaths) {
           let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
           let ajJson: Record<string, any> = {};
@@ -417,7 +456,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Update project XML files if connectors are selected
       if (selections.connectors.length > 0 && app.projectXmlPaths) {
-        // console.log(`Updating selected project XML files for ${app.name}...`);
+        console.log(`Updating selected project XML files for ${app.name}...`);
         for (const xmlPath of app.projectXmlPaths) {
           let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
           if (xmlContent && typeof xmlContent === 'string') {
@@ -429,7 +468,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Commit all changes
       if (filesToCommit.length > 0) {
-        // console.log(`Committing ${filesToCommit.length} files for ${app.name}...`);
+        console.log(`Committing ${filesToCommit.length} files for ${app.name}...`);
         const committed = await azureApi.commitFiles(
           project,
           repoId,
@@ -440,7 +479,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         if (!committed) {
           throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
         }
-        // console.log(`Successfully migrated selected components for ${app.name}`);
+        console.log(`Successfully migrated selected components for ${app.name}`);
         return true;
       } else {
         console.warn(`No files to commit for ${app.name}`);
@@ -457,7 +496,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   const handleSelectiveMigration = async (app: MuleApplication, selections: MigrationSelections) => {
     setMigrating(true);
     try {
-      // console.log('Starting selective migration for:', app.applicationName, 'with selections:', selections);
+      console.log('Starting selective migration for:', app.applicationName, 'with selections:', selections);
       
       if (repositoryType === 'github') {
         await migrateGitHubApplication(app, selections);

@@ -1,5 +1,7 @@
+
 import axios from 'axios';
 import { supabase } from "@/integrations/supabase/client";
+import { analyzeMuleConfiguration } from './muleDetection';
 
 // Azure DevOps API utility functions using Supabase Edge Functions
 interface AzureProject {
@@ -195,17 +197,19 @@ export class AzureDevOpsAPI {
     }
   }
 
-  // Enhanced method to discover and categorize files with better error handling
+  // Enhanced method to discover and categorize files with better error handling and connector extraction
   async discoverProjectFiles(projectName: string, repositoryId: string): Promise<{
     pomPaths: string[];
     artifactJsonPaths: string[];
     projectXmlPaths: string[];
+    connectors?: any[];
   }> {
     console.log(`Discovering project files for Azure DevOps repository ${repositoryId}...`);
     
     const pomPaths: string[] = [];
     const artifactJsonPaths: string[] = [];
     const projectXmlPaths: string[] = [];
+    let allConnectors: any[] = [];
 
     try {
       const allFiles = await this.listFiles(projectName, repositoryId);
@@ -223,12 +227,37 @@ export class AzureDevOpsAPI {
           console.log(`Found project XML file: ${filePath} in repository ${repositoryId}`);
         }
       });
+
+      // Enhanced connector extraction from project XML files
+      console.log(`Extracting connectors from ${projectXmlPaths.length} XML files...`);
+      for (const xmlPath of projectXmlPaths) {
+        try {
+          const xmlContent = await this.getFileContent(projectName, repositoryId, xmlPath);
+          if (xmlContent && typeof xmlContent === 'string') {
+            console.log(`Analyzing connectors in: ${xmlPath}`);
+            const connectors = analyzeMuleConfiguration(xmlContent);
+            console.log(`Found ${connectors.length} connectors in ${xmlPath}:`, connectors.map(c => c.name));
+            allConnectors = [...allConnectors, ...connectors];
+          }
+        } catch (error) {
+          console.error(`Error extracting connectors from ${xmlPath}:`, error);
+        }
+      }
+
+      // Remove duplicate connectors based on name and namespace
+      const uniqueConnectors = allConnectors.filter((connector, index, self) => 
+        index === self.findIndex(c => c.name === connector.name && c.namespace === connector.namespace)
+      );
+
+      console.log(`Total unique connectors found: ${uniqueConnectors.length}`);
+
     } catch (error) {
       console.error(`Error discovering project files for repository ${repositoryId}:`, error);
     }
 
-    console.log(`File discovery results for repository ${repositoryId}:`, { pomPaths, artifactJsonPaths, projectXmlPaths });
-    return { pomPaths, artifactJsonPaths, projectXmlPaths };
+    const result = { pomPaths, artifactJsonPaths, projectXmlPaths, connectors: allConnectors };
+    console.log(`File discovery results for repository ${repositoryId}:`, result);
+    return result;
   }
 }
 
