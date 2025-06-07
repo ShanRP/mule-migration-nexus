@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { CheckCircle2, AlertTriangle, XCircle, ExternalLink, Eye, RefreshCw } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, ExternalLink, Eye, RefreshCw, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import axios from 'axios';
@@ -12,6 +12,7 @@ import { getLatestMuleVersion, getLatestJavaVersion } from '@/utils/muleDetectio
 import { formatDistanceToNow } from 'date-fns';
 import { createAzureDevOpsAPI } from '@/utils/azureDevopsApi';
 import MigrationDetailsDialog from './MigrationDetailsDialog';
+import RulesDialog from './RulesDialog';
 
 interface MuleDependency {
   groupId: string;
@@ -58,6 +59,14 @@ interface MigrationSelections {
   connectors: string[];
 }
 
+interface MigrationRules {
+  javaVersion: string;
+  muleVersion: string;
+  minMuleVersion: string;
+  connectorReplacements: { from: string; to: string; }[];
+  dependencyVersions: { artifactId: string; version: string; }[];
+}
+
 interface RepositoryListProps {
   applications: MuleApplication[];
   setApplications: React.Dispatch<React.SetStateAction<MuleApplication[]>>;
@@ -73,6 +82,16 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   const [migrating, setMigrating] = React.useState(false);
   const [selectedApp, setSelectedApp] = useState<MuleApplication | null>(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
+  const [rulesDialogOpen, setRulesDialogOpen] = useState(false);
+  const [migrationRules, setMigrationRules] = useState<MigrationRules>({
+    javaVersion: getLatestJavaVersion(),
+    muleVersion: getLatestMuleVersion(),
+    minMuleVersion: getLatestMuleVersion(),
+    connectorReplacements: [
+      { from: 'cloudhub', to: 'logger' }
+    ],
+    dependencyVersions: []
+  });
 
   const repositoryType = selectedOrganization?.repository_type;
   const githubToken = selectedOrganization?.github_token || '';
@@ -101,18 +120,35 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     ));
   };
 
+  // Function to apply custom rules to get versions
+  const getCustomJavaVersion = () => migrationRules.javaVersion || getLatestJavaVersion();
+  const getCustomMuleVersion = () => migrationRules.muleVersion || getLatestMuleVersion();
+  const getCustomMinMuleVersion = () => migrationRules.minMuleVersion || getLatestMuleVersion();
+  
+  const getCustomDependencyVersion = (artifactId: string, defaultVersion: string) => {
+    const customVersion = migrationRules.dependencyVersions.find(dep => dep.artifactId === artifactId);
+    return customVersion ? customVersion.version : defaultVersion;
+  };
+  
+  const getConnectorReplacement = (connectorName: string) => {
+    const replacement = migrationRules.connectorReplacements.find(rep => 
+      connectorName.toLowerCase().includes(rep.from.toLowerCase())
+    );
+    return replacement ? replacement.to : 'logger';
+  };
+
   // Enhanced function to update dependency versions in POM XML
   const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[], selections: MigrationSelections): string => {
     let updatedPom = pomXml;
     
-    // Update app.runtime version if selected
+    // Update app.runtime version if selected - use custom rules
     if (selections.muleRuntime) {
-      const latestMuleVersion = getLatestMuleVersion();
+      const customMuleVersion = getCustomMuleVersion();
       updatedPom = updatedPom.replace(
         /<app\.runtime>.*?<\/app\.runtime>/g,
-        `<app.runtime>${latestMuleVersion}</app.runtime>`
+        `<app.runtime>${customMuleVersion}</app.runtime>`
       );
-      console.log(`Updated app.runtime to ${latestMuleVersion}`);
+      console.log(`Updated app.runtime to ${customMuleVersion} (from rules)`);
     }
     
     // Remove CloudHub dependencies
@@ -127,22 +163,24 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     cloudHubDepPatterns.forEach(pattern => {
       const matches = updatedPom.match(pattern);
       if (matches) {
-        // console.log('Found CloudHub dependencies to remove:', matches);
         updatedPom = updatedPom.replace(pattern, '');
       }
     });
     
-    // Update selected dependencies to their latest versions
+    // Update selected dependencies to their custom or latest versions
     dependencies.forEach(dep => {
-      if (selections.dependencies.includes(dep.artifactId) && dep.latestVersion && dep.latestVersion !== dep.version) {
-        // console.log(`Updating ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
-        
-        const dependencyRegex = new RegExp(
-          `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
-          'g'
-        );
-        
-        updatedPom = updatedPom.replace(dependencyRegex, `$1${dep.latestVersion}$2`);
+      if (selections.dependencies.includes(dep.artifactId)) {
+        const targetVersion = getCustomDependencyVersion(dep.artifactId, dep.latestVersion);
+        if (targetVersion && targetVersion !== dep.version) {
+          console.log(`Updating ${dep.artifactId} from ${dep.version} to ${targetVersion} (custom rule: ${migrationRules.dependencyVersions.find(d => d.artifactId === dep.artifactId) ? 'yes' : 'no'})`);
+          
+          const dependencyRegex = new RegExp(
+            `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
+            'g'
+          );
+          
+          updatedPom = updatedPom.replace(dependencyRegex, `$1${targetVersion}$2`);
+        }
       }
     });
     
@@ -157,7 +195,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     return updatedPom;
   };
 
-  // Enhanced function to replace CloudHub connectors with Logger in XML files
+  // Enhanced function to replace connectors with custom rules
   const replaceCloudHubConnectors = (xmlContent: string, selections: MigrationSelections): string => {
     let updatedXml = xmlContent;
     
@@ -170,10 +208,13 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       return xmlContent;
     }
     
-    // console.log('Replacing selected CloudHub connectors with Logger connectors...');
+    console.log('Replacing selected CloudHub connectors with custom replacement...');
     
-    // Add Logger namespace if not present
-    if (!updatedXml.includes('xmlns:logger=')) {
+    // Get custom replacement connector
+    const replacementConnector = getConnectorReplacement('cloudhub');
+    
+    // Add replacement namespace if not present (assuming logger for now)
+    if (replacementConnector === 'logger' && !updatedXml.includes('xmlns:logger=')) {
       const muleTag = updatedXml.match(/<mule[^>]*>/);
       if (muleTag) {
         const updatedMuleTag = muleTag[0].replace('>', ' xmlns:logger="http://www.mulesoft.org/schema/mule/logger" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/logger http://www.mulesoft.org/schema/mule/logger/current/mule-logger.xsd">');
@@ -181,46 +222,46 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       }
     }
     
-    // Replace CloudHub connectors with Logger
+    // Replace CloudHub connectors with custom replacement
     const cloudHubPatterns = [
       {
         pattern: /<cloudhub:create-notification[^>]*>[\s\S]*?<\/cloudhub:create-notification>/g,
-        replacement: '<logger:log level="INFO" message="CloudHub notification replaced with logger for CloudHub 2.0 migration" />'
+        replacement: `<${replacementConnector}:log level="INFO" message="CloudHub notification replaced with ${replacementConnector} for CloudHub 2.0 migration" />`
       },
       {
         pattern: /<cloudhub:create-notification[^>]*\/>/g,
-        replacement: '<logger:log level="INFO" message="CloudHub notification replaced with logger for CloudHub 2.0 migration" />'
+        replacement: `<${replacementConnector}:log level="INFO" message="CloudHub notification replaced with ${replacementConnector} for CloudHub 2.0 migration" />`
       },
       {
         pattern: /<cloudhub:list-notifications[^>]*>[\s\S]*?<\/cloudhub:list-notifications>/g,
-        replacement: '<logger:log level="INFO" message="CloudHub list notifications replaced with logger for CloudHub 2.0 migration" />'
+        replacement: `<${replacementConnector}:log level="INFO" message="CloudHub list notifications replaced with ${replacementConnector} for CloudHub 2.0 migration" />`
       },
       {
         pattern: /<cloudhub:list-notifications[^>]*\/>/g,
-        replacement: '<logger:log level="INFO" message="CloudHub list notifications replaced with logger for CloudHub 2.0 migration" />'
+        replacement: `<${replacementConnector}:log level="INFO" message="CloudHub list notifications replaced with ${replacementConnector} for CloudHub 2.0 migration" />`
       },
       {
         pattern: /<cloudhub:get-application[^>]*>[\s\S]*?<\/cloudhub:get-application>/g,
-        replacement: '<logger:log level="INFO" message="CloudHub get application replaced with logger for CloudHub 2.0 migration" />'
+        replacement: `<${replacementConnector}:log level="INFO" message="CloudHub get application replaced with ${replacementConnector} for CloudHub 2.0 migration" />`
       },
       {
         pattern: /<cloudhub:get-application[^>]*\/>/g,
-        replacement: '<logger:log level="INFO" message="CloudHub get application replaced with logger for CloudHub 2.0 migration" />'
+        replacement: `<${replacementConnector}:log level="INFO" message="CloudHub get application replaced with ${replacementConnector} for CloudHub 2.0 migration" />`
       },
       {
         pattern: /<cloudhub:[^>]*>[\s\S]*?<\/cloudhub:[^>]*>/g,
-        replacement: '<logger:log level="INFO" message="CloudHub operation replaced with logger for CloudHub 2.0 migration" />'
+        replacement: `<${replacementConnector}:log level="INFO" message="CloudHub operation replaced with ${replacementConnector} for CloudHub 2.0 migration" />`
       },
       {
         pattern: /<cloudhub:[^>]*\/>/g,
-        replacement: '<logger:log level="INFO" message="CloudHub operation replaced with logger for CloudHub 2.0 migration" />'
+        replacement: `<${replacementConnector}:log level="INFO" message="CloudHub operation replaced with ${replacementConnector} for CloudHub 2.0 migration" />`
       }
     ];
     
     cloudHubPatterns.forEach(({ pattern, replacement }) => {
       const matches = updatedXml.match(pattern);
       if (matches) {
-        console.log('Found CloudHub connectors to replace:', matches);
+        console.log(`Found CloudHub connectors to replace with ${replacementConnector}:`, matches);
         updatedXml = updatedXml.replace(pattern, replacement);
       }
     });
@@ -234,9 +275,9 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     return updatedXml;
   };
 
-  // Enhanced GitHub migration function
+  // Enhanced GitHub migration function with custom rules
   const migrateGitHubApplication = async (app: MuleApplication, selections: MigrationSelections) => {
-    // console.log('Starting GitHub migration for app:', app.applicationName);
+    console.log('Starting GitHub migration for app:', app.applicationName, 'with custom rules:', migrationRules);
     
     const repoPath = app.repository.replace('https://github.com/', '');
     const newBranch = 'mulemigration';
@@ -285,7 +326,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          // console.log('Successfully updated:', pomPath);
         } catch (error) {
           console.error(`Failed to update ${pomPath}:`, error);
         }
@@ -306,11 +346,11 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           const updatedAj = { ...ajJson };
           
           if (selections.javaVersion) {
-            updatedAj.javaSpecificationVersions = [getLatestJavaVersion()];
+            updatedAj.javaSpecificationVersions = [getCustomJavaVersion()];
           }
           
           if (selections.minMuleVersion) {
-            updatedAj.minMuleVersion = getLatestMuleVersion();
+            updatedAj.minMuleVersion = getCustomMinMuleVersion();
           }
           
           await axios.put(
@@ -323,7 +363,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          // console.log('Successfully updated:', ajPath);
         } catch (error) {
           console.error(`Failed to update ${ajPath}:`, error);
         }
@@ -353,7 +392,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          // console.log('Successfully updated:', xmlPath);
         } catch (error) {
           console.error(`Failed to update ${xmlPath}:`, error);
         }
@@ -361,11 +399,10 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     }
   };
 
-  // Enhanced Azure DevOps migration function
+  // Enhanced Azure DevOps migration function with custom rules
   const migrateAzureApplication = async (app: MuleApplication, selections: MigrationSelections) => {
     try {
-      // console.log('Starting Azure DevOps migration for app:', app.applicationName);
-      // console.log('Migration selections:', selections);
+      console.log('Starting Azure DevOps migration for app:', app.applicationName, 'with custom rules:', migrationRules);
       
       const urlParts = app.repository.split('/');
       const organization = urlParts[3];
@@ -374,7 +411,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       const azureApi = createAzureDevOpsAPI(organization, azureToken);
       
       // Create migration branch
-      // console.log(`Creating migration branch for ${app.name}...`);
       const branchCreated = await azureApi.createBranch(project, repoId, 'mulemigration', app.branch);
       if (!branchCreated) {
         throw new Error('Failed to create migration branch. Please check your PAT permissions.');
@@ -384,7 +420,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Update POM files if selected
       if ((selections.muleRuntime || selections.dependencies.length > 0) && app.pomPaths) {
-        // console.log(`Updating selected POM files for ${app.name}...`);
         for (const pomPath of app.pomPaths) {
           let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
           if (pomXml && typeof pomXml === 'string') {
@@ -396,7 +431,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Update artifact JSON files if selected
       if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
-        // console.log(`Updating selected artifact JSON files for ${app.name}...`);
         for (const ajPath of app.artifactJsonPaths) {
           let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
           let ajJson: Record<string, any> = {};
@@ -413,11 +447,11 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           const updatedAj = { ...ajJson };
           
           if (selections.javaVersion) {
-            updatedAj.javaSpecificationVersions = [getLatestJavaVersion()];
+            updatedAj.javaSpecificationVersions = [getCustomJavaVersion()];
           }
           
           if (selections.minMuleVersion) {
-            updatedAj.minMuleVersion = getLatestMuleVersion();
+            updatedAj.minMuleVersion = getCustomMinMuleVersion();
           }
           
           filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
@@ -426,7 +460,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Update project XML files if connectors are selected
       if (selections.connectors.length > 0 && app.projectXmlPaths) {
-        // console.log(`Updating selected project XML files for ${app.name}...`);
         for (const xmlPath of app.projectXmlPaths) {
           let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
           if (xmlContent && typeof xmlContent === 'string') {
@@ -438,7 +471,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Commit all changes
       if (filesToCommit.length > 0) {
-        // console.log(`Committing ${filesToCommit.length} files for ${app.name}...`);
         const committed = await azureApi.commitFiles(
           project,
           repoId,
@@ -449,7 +481,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         if (!committed) {
           throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
         }
-        // console.log(`Successfully migrated selected components for ${app.name}`);
         return true;
       } else {
         console.warn(`No files to commit for ${app.name}`);
@@ -582,6 +613,15 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           <CardTitle className="flex items-center justify-between">
             <span>Mule Applications ({applications.length} found)</span>
             <div className="flex items-center space-x-2">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setRulesDialogOpen(true)}
+                className="flex items-center space-x-1"
+              >
+                <Settings className="h-4 w-4" />
+                <span>Rules</span>
+              </Button>
               <Button variant="outline" size="sm" onClick={selectAll}>
                 Select All
               </Button>
@@ -600,7 +640,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
             </div>
           </CardTitle>
           <CardDescription>
-            Select applications and view details to customize your CloudHub 2.0 migration
+            Select applications and view details to customize your CloudHub 2.0 migration. Use Rules to configure custom versions and replacements.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -746,6 +786,14 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         onMigrate={handleSelectiveMigration}
         onSaveSelections={handleSaveSelections}
         repositoryType={repositoryType || 'github'}
+      />
+
+      {/* Rules Dialog */}
+      <RulesDialog
+        isOpen={rulesDialogOpen}
+        onClose={() => setRulesDialogOpen(false)}
+        onSaveRules={handleSaveRules}
+        currentRules={migrationRules}
       />
     </div>
   );
