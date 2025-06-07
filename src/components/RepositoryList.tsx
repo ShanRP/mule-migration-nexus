@@ -1,9 +1,10 @@
+
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { CheckCircle2, AlertTriangle, XCircle, ExternalLink, Eye, RefreshCw, Settings, Info } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, ExternalLink, Eye, RefreshCw, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import axios from 'axios';
@@ -13,7 +14,6 @@ import { formatDistanceToNow } from 'date-fns';
 import { createAzureDevOpsAPI } from '@/utils/azureDevopsApi';
 import MigrationDetailsDialog from './MigrationDetailsDialog';
 import RulesDialog from './RulesDialog';
-import UpdatesDialog from './UpdatesDialog';
 
 interface MuleDependency {
   groupId: string;
@@ -84,7 +84,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   const [selectedApp, setSelectedApp] = useState<MuleApplication | null>(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [rulesDialogOpen, setRulesDialogOpen] = useState(false);
-  const [updatesDialogOpen, setUpdatesDialogOpen] = useState(false);
   const [migrationRules, setMigrationRules] = useState<MigrationRules>({
     javaVersion: getLatestJavaVersion(),
     muleVersion: getLatestMuleVersion(),
@@ -369,37 +368,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           const pomSha = pomRes.data.sha;
           const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
           
-          // Apply migration rules with HIGHEST PRIORITY
-          let updatedPom = pomXml;
-          
-          // Update app.runtime version using migration rules
-          if (selections.muleRuntime) {
-            console.log(`RULES PRIORITY: Setting Mule version to ${migrationRules.muleVersion}`);
-            updatedPom = updatedPom.replace(
-              /<app\.runtime>.*?<\/app\.runtime>/g,
-              `<app.runtime>${migrationRules.muleVersion}</app.runtime>`
-            );
-          }
-          
-          // Update dependencies using migration rules
-          app.dependencies.forEach(dep => {
-            if (selections.dependencies.includes(dep.artifactId)) {
-              // Check migration rules first
-              const customRule = migrationRules.dependencyVersions.find(rule => rule.artifactId === dep.artifactId);
-              const targetVersion = customRule ? customRule.version : dep.latestVersion;
-              
-              console.log(`RULES PRIORITY: Updating ${dep.artifactId} to ${targetVersion}`);
-              
-              const dependencyRegex = new RegExp(
-                `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
-                'g'
-              );
-              
-              updatedPom = updatedPom.replace(dependencyRegex, `$1${targetVersion}$2`);
-            }
-          });
-          
-          updatedPom += '\n<!-- Updated for CloudHub 2.0 migration with rules priority -->';
+          const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections);
           
           await axios.put(
             `https://api.github.com/repos/${repoPath}/contents/${pomPath}`,
@@ -417,7 +386,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       }
     }
     
-    // Update artifact JSON files using migration rules
+    // Update artifact JSON files if javaVersion or minMuleVersion are selected - RULES PRIORITY
     if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
       for (const ajPath of app.artifactJsonPaths) {
         try {
@@ -431,13 +400,15 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           const updatedAj = { ...ajJson };
           
           if (selections.javaVersion) {
-            console.log(`RULES PRIORITY: Setting Java version to ${migrationRules.javaVersion}`);
-            updatedAj.javaSpecificationVersions = [migrationRules.javaVersion];
+            const ruleBasedJavaVersion = getRuleBasedJavaVersion();
+            console.log(`RULES PRIORITY: Setting Java version to ${ruleBasedJavaVersion}`);
+            updatedAj.javaSpecificationVersions = [ruleBasedJavaVersion];
           }
           
           if (selections.minMuleVersion) {
-            console.log(`RULES PRIORITY: Setting min Mule version to ${migrationRules.minMuleVersion}`);
-            updatedAj.minMuleVersion = migrationRules.minMuleVersion;
+            const ruleBasedMinMuleVersion = getRuleBasedMinMuleVersion();
+            console.log(`RULES PRIORITY: Setting min Mule version to ${ruleBasedMinMuleVersion}`);
+            updatedAj.minMuleVersion = ruleBasedMinMuleVersion;
           }
           
           await axios.put(
@@ -456,7 +427,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       }
     }
     
-    // Update project XML files using migration rules
+    // Update project XML files if connectors are selected - RULES PRIORITY
     if (selections.connectors.length > 0 && app.projectXmlPaths) {
       for (const xmlPath of app.projectXmlPaths) {
         try {
@@ -465,36 +436,15 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
             { headers: { Authorization: `token ${githubToken}` } }
           );
           const xmlSha = xmlRes.data.sha;
-          let xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
+          const xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
           
-          // Apply connector replacements using migration rules
-          const selectedCloudHubConnectors = selections.connectors.filter(name => 
-            name.toLowerCase().includes('cloudhub')
-          );
-          
-          if (selectedCloudHubConnectors.length > 0) {
-            // Get replacement from migration rules
-            const replacementRule = migrationRules.connectorReplacements.find(rule => 
-              'cloudhub'.includes(rule.from.toLowerCase())
-            );
-            const replacement = replacementRule ? replacementRule.to : 'logger';
-            
-            console.log(`RULES PRIORITY: Replacing CloudHub connectors with ${replacement}`);
-            
-            // Replace CloudHub connectors
-            xmlContent = xmlContent.replace(
-              /<cloudhub:[^>]*\/>/g,
-              `<${replacement}:log level="INFO" message="CloudHub operation replaced with ${replacement} for CloudHub 2.0 migration (rules priority)" />`
-            );
-          }
-          
-          xmlContent += '\n<!-- Updated for CloudHub 2.0 migration with rules priority -->';
+          const updatedXml = replaceCloudHubConnectors(xmlContent, selections) + '\n<!-- Updated for CloudHub 2.0 migration with rules priority -->';
           
           await axios.put(
             `https://api.github.com/repos/${repoPath}/contents/${xmlPath}`,
             {
               message: `Mule migration: update selected connectors for CloudHub 2.0 with rules priority - ${xmlPath}`,
-              content: btoa(xmlContent),
+              content: btoa(updatedXml),
               branch: newBranch,
               sha: xmlSha
             },
@@ -519,46 +469,87 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       const organization = urlParts[3];
       const project = urlParts[4];
       const repoId = app.id;
+      const azureApi = createAzureDevOpsAPI(organization, azureToken);
       
-      // Use edge function for Azure DevOps operations with migration rules
-      const { data: response } = await axios.post('/api/azure-devops', {
-        operation: 'commitFiles',
-        organization: organization,
-        requestData: {
-          project: project,
-          repositoryId: repoId,
-          branchName: 'mulemigration',
-          files: [
-            // Prepare files with migration rules and selections
-            ...(app.pomPaths || []).map(path => ({
-              path: path,
-              content: '', // Content will be fetched and processed by edge function
-              selections: selections,
-              dependencies: app.dependencies,
-              migrationRules: migrationRules
-            })),
-            ...(app.artifactJsonPaths || []).map(path => ({
-              path: path,
-              content: '',
-              selections: selections,
-              migrationRules: migrationRules
-            })),
-            ...(app.projectXmlPaths || []).map(path => ({
-              path: path,
-              content: '',
-              selections: selections,
-              migrationRules: migrationRules
-            }))
-          ],
-          message: 'Mule migration: update selected components for CloudHub 2.0 with rules priority',
-          migrationRules: migrationRules
+      // Create migration branch
+      const branchCreated = await azureApi.createBranch(project, repoId, 'mulemigration', app.branch);
+      if (!branchCreated) {
+        throw new Error('Failed to create migration branch. Please check your PAT permissions.');
+      }
+      
+      const filesToCommit = [];
+      
+      // Update POM files if selected - RULES PRIORITY
+      if ((selections.muleRuntime || selections.dependencies.length > 0) && app.pomPaths) {
+        for (const pomPath of app.pomPaths) {
+          let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
+          if (pomXml && typeof pomXml === 'string') {
+            const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections);
+            filesToCommit.push({ path: pomPath, content: updatedPom });
+          }
         }
-      });
+      }
       
-      if (response.success) {
+      // Update artifact JSON files if selected - RULES PRIORITY
+      if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
+        for (const ajPath of app.artifactJsonPaths) {
+          let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
+          let ajJson: Record<string, any> = {};
+          
+          if (ajContent && typeof ajContent === 'string') {
+            try {
+              ajJson = JSON.parse(ajContent);
+            } catch (e) {
+              console.warn('Invalid JSON in artifact JSON, creating new:', e);
+              ajJson = {};
+            }
+          }
+          
+          const updatedAj = { ...ajJson };
+          
+          if (selections.javaVersion) {
+            const ruleBasedJavaVersion = getRuleBasedJavaVersion();
+            console.log(`RULES PRIORITY: Setting Java version to ${ruleBasedJavaVersion}`);
+            updatedAj.javaSpecificationVersions = [ruleBasedJavaVersion];
+          }
+          
+          if (selections.minMuleVersion) {
+            const ruleBasedMinMuleVersion = getRuleBasedMinMuleVersion();
+            console.log(`RULES PRIORITY: Setting min Mule version to ${ruleBasedMinMuleVersion}`);
+            updatedAj.minMuleVersion = ruleBasedMinMuleVersion;
+          }
+          
+          filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
+        }
+      }
+      
+      // Update project XML files if connectors are selected - RULES PRIORITY
+      if (selections.connectors.length > 0 && app.projectXmlPaths) {
+        for (const xmlPath of app.projectXmlPaths) {
+          let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
+          if (xmlContent && typeof xmlContent === 'string') {
+            const updatedXml = replaceCloudHubConnectors(xmlContent, selections) + '\n<!-- Updated for CloudHub 2.0 migration with rules priority -->';
+            filesToCommit.push({ path: xmlPath, content: updatedXml });
+          }
+        }
+      }
+      
+      // Commit all changes
+      if (filesToCommit.length > 0) {
+        const committed = await azureApi.commitFiles(
+          project,
+          repoId,
+          'mulemigration',
+          filesToCommit,
+          'Mule migration: update selected components for CloudHub 2.0 with rules priority'
+        );
+        if (!committed) {
+          throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
+        }
         return true;
       } else {
-        throw new Error('Failed to commit migration changes via edge function');
+        console.warn(`No files to commit for ${app.name}`);
+        return false;
       }
     } catch (error) {
       console.error(`Error migrating Azure DevOps application ${app.name}:`, error);
@@ -606,11 +597,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   const openDetailsDialog = (app: MuleApplication) => {
     setSelectedApp(app);
     setDetailsDialogOpen(true);
-  };
-
-  const openUpdatesDialog = (app: MuleApplication) => {
-    setSelectedApp(app);
-    setUpdatesDialogOpen(true);
   };
 
   const closeDetailsDialog = () => {
@@ -779,21 +765,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
                     </TableCell>
                     <TableCell className="border border-gray-300">
                       <div className="space-y-1 text-sm">
-                        {getTotalUpdateCount(app) > 0 && (
-                          <div className="flex items-center space-x-2">
-                            <Badge variant="outline" className="text-blue-600 text-xs">
-                              {getTotalUpdateCount(app)} updates
-                            </Badge>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => openUpdatesDialog(app)}
-                              className="h-6 w-6 p-0"
-                            >
-                              <Info className="h-4 w-4 text-blue-600" />
-                            </Button>
-                          </div>
-                        )}
                         {app.muleRuntime !== getLatestMuleVersion() && (
                           <Badge variant="outline" className="text-yellow-600 text-xs">
                             Mule → {getLatestMuleVersion()}
@@ -803,6 +774,11 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
                           <Badge variant="outline" className="text-yellow-600 text-xs">
                             Java → {getLatestJavaVersion()}
                           </Badge>
+                        )}
+                        {getTotalUpdateCount(app) > 0 && (
+                          <div className="text-xs text-blue-600 font-medium">
+                            {getTotalUpdateCount(app)} updates available
+                          </div>
                         )}
                       </div>
                     </TableCell>
@@ -878,13 +854,6 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         onMigrate={handleSelectiveMigration}
         onSaveSelections={handleSaveSelections}
         repositoryType={repositoryType || 'github'}
-      />
-
-      {/* Updates Dialog */}
-      <UpdatesDialog
-        application={selectedApp}
-        isOpen={updatesDialogOpen}
-        onClose={() => setUpdatesDialogOpen(false)}
       />
 
       {/* Rules Dialog */}
