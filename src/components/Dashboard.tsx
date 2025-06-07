@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { Github, Cloud, RefreshCw, Lock, Key, CheckCircle2, AlertCircle, ExternalLink, GitBranch } from 'lucide-react';
+import { Github, Cloud, RefreshCw, Lock, Key, CheckCircle2, AlertCircle, ExternalLink, GitBranch, Settings } from 'lucide-react';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import RepositoryList from './RepositoryList';
 import { isMuleApplication, extractMuleInfo, analyzeMuleConfiguration, extractAzureOrganization, getLatestMuleVersion, getLatestJavaVersion } from '@/utils/muleDetection';
@@ -56,6 +56,7 @@ const Dashboard = () => {
   const [fetchingRepos, setFetchingRepos] = useState<'github' | 'azure' | null>(null);
   const [showRepositories, setShowRepositories] = useState(false);
   const [migrating, setMigrating] = useState(false);
+  const [reconnecting, setReconnecting] = useState<'github' | 'azure' | null>(null);
 
   // Reset state when organization changes
   useEffect(() => {
@@ -64,7 +65,26 @@ const Dashboard = () => {
     setGithubToken('');
     setAzureToken('');
     setAzureOrgUrl('');
+    setReconnecting(null);
   }, [selectedOrganization?.id, selectedOrganization?.repository_type]);
+
+  const handleReconnectGithub = () => {
+    setReconnecting('github');
+    setGithubToken('');
+  };
+
+  const handleReconnectAzure = () => {
+    setReconnecting('azure');
+    setAzureToken('');
+    setAzureOrgUrl('');
+  };
+
+  const handleCancelReconnect = () => {
+    setReconnecting(null);
+    setGithubToken('');
+    setAzureToken('');
+    setAzureOrgUrl('');
+  };
 
   const handleConnectGithub = async () => {
     if (!githubToken.trim()) {
@@ -77,6 +97,7 @@ const Dashboard = () => {
       repository_type: 'github',
     });
     setConnecting(null);
+    setReconnecting(null);
   };
 
   const handleConnectAzure = async () => {
@@ -95,6 +116,7 @@ const Dashboard = () => {
       repository_type: 'azure_devops',
     });
     setConnecting(null);
+    setReconnecting(null);
   };
 
   const fetchGitHubFileContent = async (repoFullName: string, filePath: string, token: string): Promise<string | null> => {
@@ -995,8 +1017,8 @@ const Dashboard = () => {
     );
   }
 
-  const isGithubConnected = selectedOrganization?.github_token;
-  const isAzureConnected = selectedOrganization?.azure_devops_token;
+  const isGithubConnected = selectedOrganization?.github_token && reconnecting !== 'github';
+  const isAzureConnected = selectedOrganization?.azure_devops_token && reconnecting !== 'azure';
 
   return (
     <div className="container mx-auto p-6 space-y-8">
@@ -1023,9 +1045,20 @@ const Dashboard = () => {
                 </div>
               </div>
               {isGithubConnected && (
-                <div className="flex items-center space-x-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Connected</span>
+                <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>Connected</span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleReconnectGithub}
+                    className="h-8 w-8 p-0 hover:bg-green-100"
+                    title="Reconnect GitHub"
+                  >
+                    <Settings className="h-4 w-4 text-green-600" />
+                  </Button>
                 </div>
               )}
             </div>
@@ -1060,23 +1093,34 @@ const Dashboard = () => {
                     <ExternalLink className="h-3 w-3" />
                   </a>
                   
-                  <Button
-                    onClick={handleConnectGithub}
-                    disabled={connecting === 'github' || !githubToken.trim()}
-                    className="px-6"
-                  >
-                    {connecting === 'github' ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        Connecting...
-                      </>
-                    ) : (
-                      <>
-                        <Github className="h-4 w-4 mr-2" />
-                        Connect
-                      </>
+                  <div className="flex space-x-2">
+                    {reconnecting === 'github' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCancelReconnect}
+                      >
+                        Cancel
+                      </Button>
                     )}
-                  </Button>
+                    <Button
+                      onClick={handleConnectGithub}
+                      disabled={connecting === 'github' || !githubToken.trim()}
+                      className="px-6"
+                    >
+                      {connecting === 'github' ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                          Connecting...
+                        </>
+                      ) : (
+                        <>
+                          <Github className="h-4 w-4 mr-2" />
+                          {reconnecting === 'github' ? 'Reconnect' : 'Connect'}
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
               </>
             ) : (
@@ -1129,9 +1173,20 @@ const Dashboard = () => {
                 </div>
               </div>
               {isAzureConnected && (
-                <div className="flex items-center space-x-2 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Connected</span>
+                <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>Connected</span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleReconnectAzure}
+                    className="h-8 w-8 p-0 hover:bg-blue-100"
+                    title="Reconnect Azure DevOps"
+                  >
+                    <Settings className="h-4 w-4 text-blue-600" />
+                  </Button>
                 </div>
               )}
             </div>
@@ -1173,23 +1228,34 @@ const Dashboard = () => {
                     <ExternalLink className="h-3 w-3" />
                   </a>
                   
-                  <Button
-                    onClick={handleConnectAzure}
-                    disabled={connecting === 'azure' || !azureToken.trim() || !azureOrgUrl.trim()}
-                    className="px-6"
-                  >
-                    {connecting === 'azure' ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        Connecting...
-                      </>
-                    ) : (
-                      <>
-                        <Cloud className="h-4 w-4 mr-2" />
-                        Connect
-                      </>
+                  <div className="flex space-x-2">
+                    {reconnecting === 'azure' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCancelReconnect}
+                      >
+                        Cancel
+                      </Button>
                     )}
-                  </Button>
+                    <Button
+                      onClick={handleConnectAzure}
+                      disabled={connecting === 'azure' || !azureToken.trim() || !azureOrgUrl.trim()}
+                      className="px-6"
+                    >
+                      {connecting === 'azure' ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                          Connecting...
+                        </>
+                      ) : (
+                        <>
+                          <Cloud className="h-4 w-4 mr-2" />
+                          {reconnecting === 'azure' ? 'Reconnect' : 'Connect'}
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
               </>
             ) : (
