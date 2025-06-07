@@ -37,7 +37,7 @@ const AuthProvider = ({ children }: AuthProviderProps) => {
     // Set up auth state listener first
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log('Auth state changed:', event, session);
+        // console.log('Auth state changed:', event, session);
         
         if (event === 'SIGNED_IN') {
           try {

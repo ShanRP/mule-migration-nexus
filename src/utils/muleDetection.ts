@@ -55,18 +55,18 @@ export const isMuleApplication = (pomXml: string): boolean => {
   const isMatch = muleIndicators.some(regex => {
     const match = regex.test(pomXml);
     if (match) {
-      console.log(`Matched pattern: ${regex}`);
+      // console.log(`Matched pattern: ${regex}`);
     }
     return match;
   });
   
-  console.log(`Is Mule application: ${isMatch}`);
+  // console.log(`Is Mule application: ${isMatch}`);
   return isMatch;
 };
 
 export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
-  console.log('Extracting Mule information...');
-  console.log('Artifact JSON received:', artifactJson);
+  // console.log('Extracting Mule information...');
+  // console.log('Artifact JSON received:', artifactJson);
 
   // Application name: get the first <name> tag that is a direct child of <project>
   let applicationName = 'Unknown';
@@ -92,7 +92,7 @@ export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
   // Enhanced Java version extraction with better handling
   let javaVersion = 'Unknown';
   if (artifactJson) {
-    console.log('Processing artifact JSON for Java version:', artifactJson);
+    // console.log('Processing artifact JSON for Java version:', artifactJson);
     
     try {
       // Handle both parsed object and string versions
@@ -121,15 +121,15 @@ export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
       
       for (const key of javaKeys) {
         if (jsonObj[key] !== undefined && jsonObj[key] !== null) {
-          console.log(`Found Java version under key '${key}':`, jsonObj[key]);
+          // console.log(`Found Java version under key '${key}':`, jsonObj[key]);
           
           if (Array.isArray(jsonObj[key]) && jsonObj[key].length > 0) {
             javaVersion = String(jsonObj[key][0]);
-            console.log(`Extracted Java version from array: ${javaVersion}`);
+            // console.log(`Extracted Java version from array: ${javaVersion}`);
             break;
           } else if (typeof jsonObj[key] === 'string' || typeof jsonObj[key] === 'number') {
             javaVersion = String(jsonObj[key]);
-            console.log(`Extracted Java version directly: ${javaVersion}`);
+            // console.log(`Extracted Java version directly: ${javaVersion}`);
             break;
           }
         }
@@ -137,18 +137,18 @@ export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
       
       // If still unknown, search case-insensitively through all keys
       if (javaVersion === 'Unknown') {
-        console.log('Searching case-insensitively for Java version...');
+        // console.log('Searching case-insensitively for Java version...');
         for (const [key, value] of Object.entries(jsonObj)) {
           const lowerKey = key.toLowerCase();
           if (lowerKey.includes('java') && value !== undefined && value !== null && value !== '') {
-            console.log(`Found potential Java key: ${key} with value:`, value);
+            // console.log(`Found potential Java key: ${key} with value:`, value);
             if (Array.isArray(value) && value.length > 0) {
               javaVersion = String(value[0]);
-              console.log(`Extracted Java version from case-insensitive search: ${javaVersion}`);
+              // console.log(`Extracted Java version from case-insensitive search: ${javaVersion}`);
               break;
             } else if (typeof value === 'string' || typeof value === 'number') {
               javaVersion = String(value);
-              console.log(`Extracted Java version from case-insensitive search: ${javaVersion}`);
+              // console.log(`Extracted Java version from case-insensitive search: ${javaVersion}`);
               break;
             }
           }
@@ -164,7 +164,7 @@ export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
   
   // Fallback: try to extract Java version from POM
   if (javaVersion === 'Unknown') {
-    console.log('Attempting to extract Java version from POM...');
+    // console.log('Attempting to extract Java version from POM...');
     const javaVersionPatterns = [
       /<maven\.compiler\.source>(.*?)<\/maven\.compiler\.source>/,
       /<maven\.compiler\.target>(.*?)<\/maven\.compiler\.target>/,
@@ -177,13 +177,13 @@ export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
       const match = pomXml.match(pattern);
       if (match && match[1]) {
         javaVersion = match[1];
-        console.log(`Extracted Java version from POM: ${javaVersion}`);
+        // console.log(`Extracted Java version from POM: ${javaVersion}`);
         break;
       }
     }
   }
   
-  console.log(`Final extracted Java version: ${javaVersion}`);
+  // console.log(`Final extracted Java version: ${javaVersion}`);
 
   // Dependencies extraction with better error handling
   const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
@@ -219,14 +219,14 @@ export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
       })
   );
 
-  console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies: dependencies.length });
+  // console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies: dependencies.length });
   return { applicationName, muleRuntime, muleVersion, javaVersion, dependencies };
 };
 
 export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[] => {
   const connectors: MuleConnector[] = [];
   
-  console.log('Analyzing Mule configuration for connectors...');
+  // console.log('Analyzing Mule configuration for connectors...');
   
   // Extract connectors from namespaces with better name extraction
   const namespaceMatches = [...muleConfigXml.matchAll(/xmlns:(\w+)="([^"]+)"/g)];
@@ -322,7 +322,7 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
   
   // Only add CloudHub connector replacement if CloudHub connector is actually present
   if (hasCloudHubConnector) {
-    console.log('CloudHub connector detected in configuration - adding replacement recommendation');
+    // console.log('CloudHub connector detected in configuration - adding replacement recommendation');
     const existingCloudHub = connectors.find(c => 
       c.name.toLowerCase().includes('cloudhub') || 
       c.namespace.includes('cloudhub')
@@ -337,7 +337,7 @@ export const analyzeMuleConfiguration = (muleConfigXml: string): MuleConnector[]
     }
   }
   
-  console.log(`Found ${connectors.length} connectors in configuration:`, connectors.map(c => c.name));
+  // console.log(`Found ${connectors.length} connectors in configuration:`, connectors.map(c => c.name));
   return connectors;
 };
 
@@ -373,7 +373,7 @@ const getReplacementDependency = (groupId: string, artifactId: string): string |
 
 const getLatestVersionFromAPI = async (artifactId: string): Promise<string | null> => {
   try {
-    console.log(`Fetching latest version for ${artifactId} from Supabase Edge Function...`);
+    // console.log(`Fetching latest version for ${artifactId} from Supabase Edge Function...`);
     
     // Call the Edge Function with the artifactId as a URL parameter named 'name'
     const response = await fetch(`https://kmlxkpfwtcrlgkiuwyqs.supabase.co/functions/v1/mule-connector-versions?name=${encodeURIComponent(artifactId)}`, {
@@ -385,18 +385,18 @@ const getLatestVersionFromAPI = async (artifactId: string): Promise<string | nul
     });
     
     if (!response.ok) {
-      console.error(`Error calling Edge Function for ${artifactId}: ${response.status} ${response.statusText}`);
+      // console.error(`Error calling Edge Function for ${artifactId}: ${response.status} ${response.statusText}`);
       return null;
     }
     
     const data = await response.json();
     
     if (data && data.version) {
-      console.log(`Successfully fetched version ${data.version} for ${artifactId} from Edge Function`);
+      // console.log(`Successfully fetched version ${data.version} for ${artifactId} from Edge Function`);
       return data.version;
     }
     
-    console.log(`No version found in Edge Function response for ${artifactId}`);
+    // console.log(`No version found in Edge Function response for ${artifactId}`);
     return null;
   } catch (error) {
     console.error(`Unexpected error calling Edge Function for ${artifactId}:`, error);
@@ -417,7 +417,7 @@ const getLatestVersion = async (groupId: string, artifactId: string, currentVers
   }
   
   // Fallback to current version if API call fails
-  console.log(`No version found for ${artifactId}, using current version ${currentVersion}`);
+  // console.log(`No version found for ${artifactId}, using current version ${currentVersion}`);
   return currentVersion;
 };
 

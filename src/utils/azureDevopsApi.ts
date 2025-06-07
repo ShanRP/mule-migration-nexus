@@ -44,7 +44,7 @@ export class AzureDevOpsAPI {
         token: this.token 
       };
       
-      console.log('Calling edge function with body:', JSON.stringify(requestBody, null, 2));
+      // console.log('Calling edge function with body:', JSON.stringify(requestBody, null, 2));
       
       const { data: response, error } = await supabase.functions.invoke('azure-devops', {
         body: requestBody
@@ -64,14 +64,14 @@ export class AzureDevOpsAPI {
 
   async getProjects(): Promise<AzureProject[]> {
     try {
-      console.log('Fetching Azure DevOps projects via Supabase Edge Function...');
+      // console.log('Fetching Azure DevOps projects via Supabase Edge Function...');
       const response = await this.callEdgeFunction('projects', {});
       
       if (response && response.value) {
-        console.log(`Successfully fetched ${response.value.length} projects`);
+        // console.log(`Successfully fetched ${response.value.length} projects`);
         return response.value;
       }
-      console.log('No projects found in response');
+      // console.log('No projects found in response');
       return [];
     } catch (error) {
       console.error('Error fetching projects:', error);
@@ -87,16 +87,16 @@ export class AzureDevOpsAPI {
 
   async getRepositories(projectName: string): Promise<AzureRepository[]> {
     try {
-      console.log(`Fetching repositories for project: ${projectName} via Supabase Edge Function...`);
+      // console.log(`Fetching repositories for project: ${projectName} via Supabase Edge Function...`);
       const response = await this.callEdgeFunction('repositories', {
         project: projectName
       });
       
       if (response && response.value) {
-        console.log(`Found ${response.value.length} repositories in project ${projectName}`);
+        // console.log(`Found ${response.value.length} repositories in project ${projectName}`);
         return response.value;
       }
-      console.log(`No repositories found for project ${projectName}`);
+      // console.log(`No repositories found for project ${projectName}`);
       return [];
     } catch (error) {
       console.error(`Error fetching repositories for project ${projectName}:`, error);
@@ -118,7 +118,7 @@ export class AzureDevOpsAPI {
       });
       
       if (response && Array.isArray(response.files)) {
-        console.log(`Found ${response.files.length} files in repository`);
+        // console.log(`Found ${response.files.length} files in repository`);
         return response.files;
       }
       return [];
@@ -130,7 +130,7 @@ export class AzureDevOpsAPI {
 
   async getFileContent(projectName: string, repositoryId: string, filePath: string): Promise<string | null> {
     try {
-      console.log(`Fetching file content for: ${filePath}`);
+      // console.log(`Fetching file content for: ${filePath}`);
       const response = await this.callEdgeFunction('fileContent', {
         project: projectName,
         repositoryId,
@@ -138,11 +138,11 @@ export class AzureDevOpsAPI {
       });
       
       if (response && response.content) {
-        console.log(`Successfully fetched content for: ${filePath}`);
+        // console.log(`Successfully fetched content for: ${filePath}`);
         return response.content;
       }
       
-      console.log(`No content found for: ${filePath}`);
+      // console.log(`No content found for: ${filePath}`);
       return null;
     } catch (error) {
       console.error(`Error fetching file content for ${filePath}:`, error);
@@ -157,7 +157,7 @@ export class AzureDevOpsAPI {
 
   async createBranch(projectName: string, repositoryId: string, branchName: string, sourceBranch: string): Promise<boolean> {
     try {
-      console.log(`Creating branch ${branchName} from ${sourceBranch}...`);
+      // console.log(`Creating branch ${branchName} from ${sourceBranch}...`);
       const response = await this.callEdgeFunction('createBranch', {
         project: projectName,
         repositoryId,
@@ -166,7 +166,7 @@ export class AzureDevOpsAPI {
       });
       
       const success = response && response.success;
-      console.log(`Branch creation ${success ? 'successful' : 'failed'}`);
+      // console.log(`Branch creation ${success ? 'successful' : 'failed'}`);
       return success;
     } catch (error) {
       console.error('Error creating branch:', error);
@@ -176,7 +176,7 @@ export class AzureDevOpsAPI {
 
   async commitFiles(projectName: string, repositoryId: string, branchName: string, files: Array<{path: string, content: string}>, message: string): Promise<boolean> {
     try {
-      console.log(`Committing ${files.length} files to branch ${branchName}...`);
+      // console.log(`Committing ${files.length} files to branch ${branchName}...`);
       const response = await this.callEdgeFunction('commitFiles', {
         project: projectName,
         repositoryId,
@@ -186,7 +186,7 @@ export class AzureDevOpsAPI {
       });
       
       const success = response && response.success;
-      console.log(`File commit ${success ? 'successful' : 'failed'}`);
+      // console.log(`File commit ${success ? 'successful' : 'failed'}`);
       return success;
     } catch (error) {
       console.error('Error committing files:', error);
@@ -200,7 +200,7 @@ export class AzureDevOpsAPI {
     artifactJsonPaths: string[];
     projectXmlPaths: string[];
   }> {
-    console.log('Discovering project files for Azure DevOps repository...');
+    // console.log('Discovering project files for Azure DevOps repository...');
     
     const pomPaths: string[] = [];
     const artifactJsonPaths: string[] = [];
@@ -208,18 +208,18 @@ export class AzureDevOpsAPI {
 
     try {
       const allFiles = await this.listFiles(projectName, repositoryId);
-      console.log(`Analyzing ${allFiles.length} files for Mule artifacts...`);
+      // console.log(`Analyzing ${allFiles.length} files for Mule artifacts...`);
 
       allFiles.forEach(filePath => {
         if (filePath.endsWith('pom.xml')) {
           pomPaths.push(filePath);
-          console.log(`Found POM file: ${filePath}`);
+          // console.log(`Found POM file: ${filePath}`);
         } else if (filePath.endsWith('mule-artifact.json')) {
           artifactJsonPaths.push(filePath);
-          console.log(`Found artifact JSON file: ${filePath}`);
+          // console.log(`Found artifact JSON file: ${filePath}`);
         } else if (filePath.endsWith('.xml') && filePath.includes('src/main/mule/')) {
           projectXmlPaths.push(filePath);
-          console.log(`Found project XML file: ${filePath}`);
+          // console.log(`Found project XML file: ${filePath}`);
         }
       });
     } catch (error) {

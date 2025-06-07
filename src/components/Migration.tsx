@@ -186,12 +186,12 @@ const Migration = () => {
   // Updated Azure DevOps scanning using the new API
   const scanAzureRepositories = async (token: string, organization: string) => {
     try {
-      console.log('Scanning Azure DevOps repositories using new API...');
+      // console.log('Scanning Azure DevOps repositories using new API...');
       
       const azureApi = createAzureDevOpsAPI(organization, token);
       
       const projects = await azureApi.getProjects();
-      console.log(`Found ${projects.length} projects`);
+      // console.log(`Found ${projects.length} projects`);
       
       const allRepos = [];
       for (const project of projects) {
@@ -210,18 +210,18 @@ const Migration = () => {
       
       for (const repo of allRepos) {
         try {
-          console.log(`Scanning repo ${repo.name}...`);
+          // console.log(`Scanning repo ${repo.name}...`);
           const allFiles = await azureApi.listFiles(repo.project, repo.id);
           const pomFiles = allFiles.filter(f => f.toLowerCase().endsWith('pom.xml'));
           const artifactJsonFiles = allFiles.filter(f => f.endsWith('mule-artifact.json'));
           const projectXmlFiles = allFiles.filter(f => f.startsWith('src/main/') && f.endsWith('.xml'));
-          console.log(`Found ${pomFiles.length} pom.xml files in ${repo.name}`);
+          // console.log(`Found ${pomFiles.length} pom.xml files in ${repo.name}`);
           
           for (const pomPath of pomFiles) {
-            console.log(`Processing pom.xml at ${pomPath}...`);
+            // console.log(`Processing pom.xml at ${pomPath}...`);
             const pomXml = await azureApi.getFileContent(repo.project, repo.id, pomPath);
             if (!pomXml || !isMuleApplication(pomXml)) {
-              console.log(`Skipping non-Mule pom.xml at ${pomPath}`);
+              // console.log(`Skipping non-Mule pom.xml at ${pomPath}`);
               continue;
             }
             
@@ -229,13 +229,13 @@ const Migration = () => {
             let artifactJsonPath = null;
             for (const ajPath of artifactJsonFiles) {
               try {
-                console.log(`Fetching mule-artifact.json: ${ajPath}`);
+                // console.log(`Fetching mule-artifact.json: ${ajPath}`);
                 const artifactContent = await azureApi.getFileContent(repo.project, repo.id, ajPath);
                 if (artifactContent) {
                   try {
                     artifactJson = JSON.parse(artifactContent);
                     artifactJsonPath = ajPath;
-                    console.log('Successfully parsed artifact.json:', artifactJson);
+                    // console.log('Successfully parsed artifact.json:', artifactJson);
                     break;
                   } catch (e) {
                     console.error('Error parsing artifact.json:', e);
@@ -276,7 +276,7 @@ const Migration = () => {
               }
             }
             
-            console.log(`Found Mule application: ${applicationName} in ${repo.name}`);
+            // console.log(`Found Mule application: ${applicationName} in ${repo.name}`);
             muleApps.push({
               id: `${repo.id}-${pomPath}`,
               name: repo.name,
@@ -309,11 +309,11 @@ const Migration = () => {
   // Updated Azure DevOps migration using new API
   const migrateAzureApplication = async (app: MuleApplication) => {
     try {
-      console.log(`Migrating app: ${app.applicationName} with paths:`, {
-        pomPaths: app.pomPaths,
-        artifactJsonPaths: app.artifactJsonPaths,
-        projectXmlPaths: app.projectXmlPaths
-      });
+      // console.log(`Migrating app: ${app.applicationName} with paths:`, {
+      //   pomPaths: app.pomPaths,
+      //   artifactJsonPaths: app.artifactJsonPaths,
+      //   projectXmlPaths: app.projectXmlPaths
+      // });
 
       // Extract Azure DevOps details from repository URL
       const urlParts = app.repository.split('/');
@@ -326,8 +326,8 @@ const Migration = () => {
         repoName = repoName.replace('.git', '');
       }
       
-      console.log('Starting Azure DevOps migration for app:', app.applicationName);
-      console.log('Azure DevOps details:', { organization, project, repoName });
+      // console.log('Starting Azure DevOps migration for app:', app.applicationName);
+      // console.log('Azure DevOps details:', { organization, project, repoName });
       
       const azureApi = createAzureDevOpsAPI(organization, azureToken);
       
@@ -342,10 +342,10 @@ const Migration = () => {
       const repositoryId = targetRepo.id;
       const defaultBranch = targetRepo.defaultBranch || 'main';
       
-      console.log('Default branch:', defaultBranch);
+      // console.log('Default branch:', defaultBranch);
       
       // Create migration branch
-      console.log(`Creating migration branch for ${app.applicationName}...`);
+      // console.log(`Creating migration branch for ${app.applicationName}...`);
       const branchCreated = await azureApi.createBranch(project, repositoryId, 'mulemigration', defaultBranch);
       if (!branchCreated) {
         console.warn('Failed to create migration branch, but continuing...');
@@ -355,10 +355,10 @@ const Migration = () => {
       const filesToCommit = [];
       
       // Update POM files
-      console.log(`Processing POM files for Azure DevOps:`, app.pomPaths);
+      // console.log(`Processing POM files for Azure DevOps:`, app.pomPaths);
       for (const pomPath of app.pomPaths) {
         try {
-          console.log(`Fetching pom.xml: ${pomPath}`);
+          // console.log(`Fetching pom.xml: ${pomPath}`);
           const pomContent = await azureApi.getFileContent(project, repositoryId, pomPath);
           if (pomContent && typeof pomContent === 'string') {
             const updatedPom = updatePomXmlWithLatestVersions(pomContent, app.dependencies);
@@ -372,10 +372,10 @@ const Migration = () => {
       }
       
       // Update artifact JSON files
-      console.log(`Processing artifact JSON files for Azure DevOps:`, app.artifactJsonPaths);
+      // console.log(`Processing artifact JSON files for Azure DevOps:`, app.artifactJsonPaths);
       for (const ajPath of app.artifactJsonPaths) {
         try {
-          console.log(`Fetching mule-artifact.json: ${ajPath}`);
+          // console.log(`Fetching mule-artifact.json: ${ajPath}`);
           const ajContent = await azureApi.getFileContent(project, repositoryId, ajPath);
           if (ajContent) {
             let ajJson;
@@ -399,10 +399,10 @@ const Migration = () => {
       }
       
       // Update project XML files
-      console.log(`Processing project XML files for Azure DevOps:`, app.projectXmlPaths);
+      // console.log(`Processing project XML files for Azure DevOps:`, app.projectXmlPaths);
       for (const xmlPath of app.projectXmlPaths) {
         try {
-          console.log(`Fetching project XML: ${xmlPath}`);
+          // console.log(`Fetching project XML: ${xmlPath}`);
           const xmlContent = await azureApi.getFileContent(project, repositoryId, xmlPath);
           if (xmlContent && typeof xmlContent === 'string') {
             const updatedXml = updateProjectXml(xmlContent);
@@ -417,7 +417,7 @@ const Migration = () => {
       
       // Commit all changes
       if (filesToCommit.length > 0) {
-        console.log(`Committing ${filesToCommit.length} files for ${app.applicationName}...`);
+        // console.log(`Committing ${filesToCommit.length} files for ${app.applicationName}...`);
         const committed = await azureApi.commitFiles(
           project, 
           repositoryId, 
@@ -430,7 +430,7 @@ const Migration = () => {
           throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
         }
         
-        console.log(`Successfully migrated ${app.applicationName}`);
+        // console.log(`Successfully migrated ${app.applicationName}`);
         return true;
       } else {
         console.log(`No changes to push to Azure DevOps`);
@@ -474,11 +474,11 @@ const Migration = () => {
       let muleApps: any[] = [];
       
       if (repositoryType === 'github' && githubToken) {
-        console.log('Scanning GitHub repositories...');
+        // console.log('Scanning GitHub repositories...');
         const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
         muleApps = await scanGitHubRepositories(githubToken, orgName);
       } else if (repositoryType === 'azure_devops' && azureToken) {
-        console.log('Scanning Azure DevOps repositories...');
+        // console.log('Scanning Azure DevOps repositories...');
         const organization = extractAzureOrganization(selectedOrganization?.azure_devops_url || '');
         if (!organization) {
           toast.error('Please provide a valid Azure DevOps organization URL');
@@ -511,7 +511,7 @@ const Migration = () => {
   // Helper to update pom.xml content with latest versions
   const updatePomXmlWithLatestVersions = (pomXml: string, dependencies: MuleDependency[]) => {
     if (typeof pomXml !== 'string') {
-      console.error('POM XML is not a string:', typeof pomXml);
+      // console.error('POM XML is not a string:', typeof pomXml);
       return String(pomXml);
     }
     
@@ -596,7 +596,7 @@ const Migration = () => {
           // 3. Update all pom.xml files
           for (const pomPath of app.pomPaths) {
             const normPomPath = normalizePath(pomPath);
-            console.log('Attempting to fetch/update pom.xml:', normPomPath, 'on branch', newBranch);
+            // console.log('Attempting to fetch/update pom.xml:', normPomPath, 'on branch', newBranch);
             const pomRes = await axios.get(
               `https://api.github.com/repos/${repoPath}/contents/${normPomPath}`,
               { headers: { Authorization: `token ${githubToken}` } }
@@ -618,7 +618,7 @@ const Migration = () => {
           // 4. Update all mule-artifact.json files
           for (const ajPath of app.artifactJsonPaths) {
             const normAjPath = normalizePath(ajPath);
-            console.log('Attempting to fetch/update mule-artifact.json:', normAjPath, 'on branch', newBranch);
+            // console.log('Attempting to fetch/update mule-artifact.json:', normAjPath, 'on branch', newBranch);
             const ajRes = await axios.get(
               `https://api.github.com/repos/${repoPath}/contents/${normAjPath}`,
               { headers: { Authorization: `token ${githubToken}` } }
@@ -640,7 +640,7 @@ const Migration = () => {
           // 5. Update all src/main/*.xml files
           for (const xmlPath of app.projectXmlPaths) {
             const normXmlPath = normalizePath(xmlPath);
-            console.log('Attempting to fetch/update project xml:', normXmlPath, 'on branch', newBranch);
+            // console.log('Attempting to fetch/update project xml:', normXmlPath, 'on branch', newBranch);
             const xmlRes = await axios.get(
               `https://api.github.com/repos/${repoPath}/contents/${normXmlPath}`,
               { headers: { Authorization: `token ${githubToken}` } }

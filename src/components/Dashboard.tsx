@@ -121,7 +121,7 @@ const Dashboard = () => {
 
   const fetchGitHubFileContent = async (repoFullName: string, filePath: string, token: string): Promise<string | null> => {
     try {
-      console.log(`Fetching ${filePath} from GitHub repo ${repoFullName}`);
+      // console.log(`Fetching ${filePath} from GitHub repo ${repoFullName}`);
       const response = await axios.get(
         `https://api.github.com/repos/${repoFullName}/contents/${filePath}`,
         { headers: { Authorization: `token ${token}` } }
@@ -129,7 +129,7 @@ const Dashboard = () => {
       
       if (response.data && response.data.content) {
         const content = atob(response.data.content.replace(/\n/g, ''));
-        console.log(`Successfully fetched ${filePath} (${content.length} characters)`);
+        // console.log(`Successfully fetched ${filePath} (${content.length} characters)`);
         return content;
       }
     } catch (error) {
@@ -143,7 +143,7 @@ const Dashboard = () => {
     try {
       // Skip the target directory entirely
       if (path.includes('/target/') || path === 'target' || path.startsWith('target/')) {
-        console.log(`Skipping target directory: ${path}`);
+        // console.log(`Skipping target directory: ${path}`);
         return files;
       }
       
@@ -154,7 +154,7 @@ const Dashboard = () => {
       for (const item of res.data) {
         // Skip target directories at any level
         if (item.name === 'target' || item.path.includes('/target/')) {
-          console.log(`Skipping target directory: ${item.path}`);
+          // console.log(`Skipping target directory: ${item.path}`);
           continue;
         }
         
@@ -192,13 +192,13 @@ const Dashboard = () => {
     
     for (const repo of allRepos) {
       try {
-        console.log(`Scanning repository: ${repo.name}`);
+        // console.log(`Scanning repository: ${repo.name}`);
         const allFiles = await listAllGitHubFiles(repo.full_name, '', token);
         const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
         const artifactJsonFiles = allFiles.filter(f => f.endsWith('mule-artifact.json'));
         const projectXmlFiles = allFiles.filter(f => f.endsWith('.xml') && f.includes('src/main/mule/'));
         
-        console.log(`Found in ${repo.name}:`, { pomFiles: pomFiles.length, artifactJsonFiles: artifactJsonFiles.length, projectXmlFiles: projectXmlFiles.length });
+        // console.log(`Found in ${repo.name}:`, { pomFiles: pomFiles.length, artifactJsonFiles: artifactJsonFiles.length, projectXmlFiles: projectXmlFiles.length });
 
         // Check if any POM file contains a Mule application
         let isMuleRepo = false;
@@ -206,10 +206,10 @@ const Dashboard = () => {
         let applicationInfo = null;
         
         for (const pomPath of pomFiles) {
-          console.log(`Processing pom.xml: ${pomPath}`);
+          // console.log(`Processing pom.xml: ${pomPath}`);
           const pomXml = await fetchGitHubFileContent(repo.full_name, pomPath, token);
           if (pomXml && isMuleApplication(pomXml)) {
-            console.log(`Found Mule application in: ${pomPath}`);
+            // console.log(`Found Mule application in: ${pomPath}`);
             isMuleRepo = true;
             mainPomPath = pomPath;
             
@@ -223,12 +223,12 @@ const Dashboard = () => {
             ].filter(path => path !== '/');
             
             for (const ajPath of artifactJsonPaths) {
-              console.log(`Looking for artifact JSON at: ${ajPath}`);
+              // console.log(`Looking for artifact JSON at: ${ajPath}`);
               const artifactJsonContent = await fetchGitHubFileContent(repo.full_name, ajPath, token);
               if (artifactJsonContent) {
                 try {
                   artifactJson = JSON.parse(artifactJsonContent);
-                  console.log('Successfully parsed artifact JSON:', artifactJson);
+                  // console.log('Successfully parsed artifact JSON:', artifactJson);
                   break;
                 } catch (error) {
                   console.log('Error parsing artifact JSON:', error);
@@ -237,19 +237,19 @@ const Dashboard = () => {
             }
             
             applicationInfo = await extractMuleInfo(pomXml, artifactJson);
-            console.log('Extracted Mule info:', { 
-              applicationName: applicationInfo.applicationName, 
-              muleRuntime: applicationInfo.muleRuntime, 
-              muleVersion: applicationInfo.muleVersion, 
-              javaVersion: applicationInfo.javaVersion, 
-              dependencies: applicationInfo.dependencies.length 
-            });
+            // console.log('Extracted Mule info:', { 
+            //   applicationName: applicationInfo.applicationName, 
+            //   muleRuntime: applicationInfo.muleRuntime, 
+            //   muleVersion: applicationInfo.muleVersion, 
+            //   javaVersion: applicationInfo.javaVersion, 
+            //   dependencies: applicationInfo.dependencies.length 
+            // });
             break;
           }
         }
         
         if (isMuleRepo && applicationInfo) {
-          console.log(`Processing Mule repository: ${repo.name}`);
+          // console.log(`Processing Mule repository: ${repo.name}`);
           
           // Analyze connectors from all XML files
           let connectors: any[] = [];
@@ -312,7 +312,7 @@ const Dashboard = () => {
           // Only add if not already processed (avoid duplicates)
           if (!muleAppsMap.has(repo.id.toString())) {
             muleAppsMap.set(repo.id.toString(), muleApp);
-            console.log(`Added unique Mule app: ${applicationInfo.applicationName} for repository ${repo.name}`);
+            // console.log(`Added unique Mule app: ${applicationInfo.applicationName} for repository ${repo.name}`);
           }
         }
       } catch (error) {
@@ -322,19 +322,19 @@ const Dashboard = () => {
     }
     
     const uniqueMuleApps = Array.from(muleAppsMap.values());
-    console.log(`Total unique Mule applications found: ${uniqueMuleApps.length}`);
+    // console.log(`Total unique Mule applications found: ${uniqueMuleApps.length}`);
     return uniqueMuleApps;
   };
 
   const scanAzureRepositories = async (token: string, organization: string) => {
     try {
-      console.log('Scanning Azure DevOps repositories...');
+      // console.log('Scanning Azure DevOps repositories...');
       
       const azureApi = createAzureDevOpsAPI(organization, token);
       
       // Get all projects
       const projects = await azureApi.getProjects();
-      console.log(`Found ${projects.length} projects in organization ${organization}`);
+      // console.log(`Found ${projects.length} projects in organization ${organization}`);
       
       if (projects.length === 0) {
         toast.error('No projects found in Azure DevOps organization. Please check your organization URL and PAT permissions.');
@@ -346,7 +346,7 @@ const Dashboard = () => {
       // Get repositories for each project
       for (const project of projects) {
         try {
-          console.log(`Fetching repositories for project: ${project.name}`);
+          // console.log(`Fetching repositories for project: ${project.name}`);
           const repos = await azureApi.getRepositories(project.name);
           
           for (const repo of repos) {
@@ -358,12 +358,12 @@ const Dashboard = () => {
             });
           }
         } catch (error) {
-          console.error(`Error fetching repos for project ${project.name}:`, error);
+          // console.error(`Error fetching repos for project ${project.name}:`, error);
           toast.error(`Failed to fetch repositories for project ${project.name}. Please check your PAT permissions.`);
         }
       }
       
-      console.log(`Total Azure DevOps repositories to scan: ${allRepos.length}`);
+      // console.log(`Total Azure DevOps repositories to scan: ${allRepos.length}`);
       
       if (allRepos.length === 0) {
         toast.error('No repositories found in any project. Please check your PAT permissions and repository access.');
@@ -374,10 +374,10 @@ const Dashboard = () => {
       
       for (const repo of allRepos) {
         try {
-          console.log(`Scanning Azure DevOps repo: ${repo.name} (ID: ${repo.repoId}) in project ${repo.project}`);
+          // console.log(`Scanning Azure DevOps repo: ${repo.name} (ID: ${repo.repoId}) in project ${repo.project}`);
           
           const allFiles = await azureApi.listFiles(repo.project, repo.repoId);
-          console.log(`Found ${allFiles.length} total files in repo ${repo.name}`);
+          // console.log(`Found ${allFiles.length} total files in repo ${repo.name}`);
           
           const pomFiles = allFiles.filter(f => f.endsWith('pom.xml'));
           const artifactJsonFiles = allFiles.filter(f => f.endsWith('mule-artifact.json'));
@@ -395,10 +395,10 @@ const Dashboard = () => {
           let applicationInfo = null;
           
           for (const pomPath of pomFiles) {
-            console.log(`Processing pom.xml: ${pomPath}`);
+            // console.log(`Processing pom.xml: ${pomPath}`);
             const pomXml = await azureApi.getFileContent(repo.project, repo.repoId, pomPath);
             if (pomXml && isMuleApplication(pomXml)) {
-              console.log(`Found Mule application in: ${pomPath}`);
+              // console.log(`Found Mule application in: ${pomPath}`);
               isMuleRepo = true;
               mainPomPath = pomPath;
               
@@ -412,12 +412,12 @@ const Dashboard = () => {
               ].filter(path => path !== '/');
               
               for (const ajPath of artifactJsonPaths) {
-                console.log(`Looking for artifact JSON at: ${ajPath}`);
+                // console.log(`Looking for artifact JSON at: ${ajPath}`);
                 const artifactJsonContent = await azureApi.getFileContent(repo.project, repo.repoId, ajPath);
                 if (artifactJsonContent) {
                   try {
                     artifactJson = JSON.parse(artifactJsonContent);
-                    console.log('Successfully parsed artifact JSON:', artifactJson);
+                    // console.log('Successfully parsed artifact JSON:', artifactJson);
                     break;
                   } catch (error) {
                     console.log('Error parsing artifact JSON:', error);
@@ -426,26 +426,26 @@ const Dashboard = () => {
               }
               
               applicationInfo = await extractMuleInfo(pomXml, artifactJson);
-              console.log('Extracted Mule info:', { 
-                applicationName: applicationInfo.applicationName, 
-                muleRuntime: applicationInfo.muleRuntime, 
-                muleVersion: applicationInfo.muleVersion, 
-                javaVersion: applicationInfo.javaVersion, 
-                dependencies: applicationInfo.dependencies.length 
-              });
+              // console.log('Extracted Mule info:', { 
+              //   applicationName: applicationInfo.applicationName, 
+              //   muleRuntime: applicationInfo.muleRuntime, 
+              //   muleVersion: applicationInfo.muleVersion, 
+              //   javaVersion: applicationInfo.javaVersion, 
+              //   dependencies: applicationInfo.dependencies.length 
+              // });
               break;
             }
           }
           
           if (isMuleRepo && applicationInfo) {
-            console.log(`Processing Mule repository: ${repo.name}`);
+            // console.log(`Processing Mule repository: ${repo.name}`);
             
             let connectors: any[] = [];
             
             // Look for XML files in the mule directory
             const muleDirPath = `${mainPomPath.substring(0, mainPomPath.lastIndexOf('/'))}/src/main/mule`;
             const muleFiles = allFiles.filter(f => f.startsWith(muleDirPath) && f.endsWith('.xml'));
-            console.log(`Found ${muleFiles.length} XML files in mule directory`);
+            // console.log(`Found ${muleFiles.length} XML files in mule directory`);
             
             for (const xmlFile of muleFiles) {
               const xmlContent = await azureApi.getFileContent(repo.project, repo.repoId, xmlFile);
@@ -458,7 +458,7 @@ const Dashboard = () => {
               }
             }
             
-            console.log(`Total connectors found: ${connectors.length}`);
+            // console.log(`Total connectors found: ${connectors.length}`);
             
             const muleApp: MuleApplication = {
               id: `${repo.repoId}`,
@@ -480,17 +480,17 @@ const Dashboard = () => {
             
             if (!muleAppsMap.has(repo.repoId)) {
               muleAppsMap.set(repo.repoId, muleApp);
-              console.log(`Added unique Mule app: ${applicationInfo.applicationName} for repository ${repo.name}`);
+              // console.log(`Added unique Mule app: ${applicationInfo.applicationName} for repository ${repo.name}`);
             }
           }
         } catch (error) {
-          console.error(`Error processing Azure repo ${repo.name}:`, error);
+          // console.error(`Error processing Azure repo ${repo.name}:`, error);
           toast.error(`Failed to process repository ${repo.name}. Please check your PAT permissions and repository access.`);
         }
       }
       
       const uniqueMuleApps = Array.from(muleAppsMap.values());
-      console.log(`Total unique Mule applications found in Azure DevOps: ${uniqueMuleApps.length}`);
+      // console.log(`Total unique Mule applications found in Azure DevOps: ${uniqueMuleApps.length}`);
       return uniqueMuleApps;
       
     } catch (error) {
@@ -522,7 +522,7 @@ const Dashboard = () => {
     setApplications([]);
 
     try {
-      console.log('Scanning GitHub repositories...');
+      // console.log('Scanning GitHub repositories...');
       const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
       const muleApps = await scanGitHubRepositories(githubToken, orgName);
 
@@ -553,13 +553,13 @@ const Dashboard = () => {
     setApplications([]);
 
     try {
-      console.log('Scanning Azure DevOps repositories...');
+      // console.log('Scanning Azure DevOps repositories...');
       const organization = extractAzureOrganization(selectedOrganization?.azure_devops_url || '');
       if (!organization) {
         toast.error('Please provide a valid Azure DevOps organization URL');
         return;
       }
-      console.log('Azure DevOps organization:', organization);
+      // console.log('Azure DevOps organization:', organization);
       const muleApps = await scanAzureRepositories(azureToken, organization);
 
       setApplications(muleApps);
@@ -587,7 +587,7 @@ const Dashboard = () => {
       /<app\.runtime>.*?<\/app\.runtime>/g,
       `<app.runtime>${latestMuleVersion}</app.runtime>`
     );
-    console.log(`Updated app.runtime to ${latestMuleVersion}`);
+    // console.log(`Updated app.runtime to ${latestMuleVersion}`);
     
     // Remove CloudHub dependencies
     const cloudHubDepPatterns = [
@@ -601,7 +601,7 @@ const Dashboard = () => {
     cloudHubDepPatterns.forEach(pattern => {
       const matches = updatedPom.match(pattern);
       if (matches) {
-        console.log('Found CloudHub dependencies to remove:', matches);
+        // console.log('Found CloudHub dependencies to remove:', matches);
         updatedPom = updatedPom.replace(pattern, '');
       }
     });
@@ -609,7 +609,7 @@ const Dashboard = () => {
     // Update dependencies to their latest versions
     dependencies.forEach(dep => {
       if (dep.latestVersion && dep.latestVersion !== dep.version) {
-        console.log(`Updating ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
+        // console.log(`Updating ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
         
         const dependencyRegex = new RegExp(
           `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
@@ -725,7 +725,8 @@ const Dashboard = () => {
         { headers: { Authorization: `token ${githubToken}` } }
       );
     } catch (e) {
-      console.log('Branch may already exist, continuing...');
+      // console.log('Branch may already exist, continuing...');
+      toast.success('Branch may already exist, continuing...');
     }
     
     // Update POM files
@@ -751,7 +752,7 @@ const Dashboard = () => {
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          console.log('Successfully updated:', pomPath);
+          // console.log('Successfully updated:', pomPath);
         } catch (error) {
           console.error(`Failed to update ${pomPath}:`, error);
         }
@@ -785,7 +786,7 @@ const Dashboard = () => {
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          console.log('Successfully updated:', ajPath);
+          // console.log('Successfully updated:', ajPath);
         } catch (error) {
           console.error(`Failed to update ${ajPath}:`, error);
         }
@@ -815,7 +816,7 @@ const Dashboard = () => {
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          console.log('Successfully updated:', xmlPath);
+          // console.log('Successfully updated:', xmlPath);
         } catch (error) {
           console.error(`Failed to update ${xmlPath}:`, error);
         }
@@ -826,7 +827,7 @@ const Dashboard = () => {
   // Azure DevOps migration function
   const migrateAzureApplication = async (app: MuleApplication) => {
     try {
-      console.log('Starting Azure DevOps migration for app:', app.applicationName);
+      // console.log('Starting Azure DevOps migration for app:', app.applicationName);
       
       const urlParts = app.repository.split('/');
       const organization = urlParts[3];
@@ -836,7 +837,7 @@ const Dashboard = () => {
       const azureApi = createAzureDevOpsAPI(organization, azureToken);
       
       // Create migration branch
-      console.log(`Creating migration branch for ${app.name}...`);
+      // console.log(`Creating migration branch for ${app.name}...`);
       const branchCreated = await azureApi.createBranch(project, repoId, 'mulemigration', app.branch);
       if (!branchCreated) {
         throw new Error('Failed to create migration branch. Please check your PAT permissions.');
@@ -846,7 +847,7 @@ const Dashboard = () => {
       
       // Update POM files
       if (app.pomPaths) {
-        console.log(`Updating POM files for ${app.name}...`);
+        // console.log(`Updating POM files for ${app.name}...`);
         for (const pomPath of app.pomPaths) {
           let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
           if (pomXml && typeof pomXml === 'string') {
@@ -858,7 +859,7 @@ const Dashboard = () => {
       
       // Update artifact JSON files
       if (app.artifactJsonPaths) {
-        console.log(`Updating artifact JSON files for ${app.name}...`);
+        // console.log(`Updating artifact JSON files for ${app.name}...`);
         for (const ajPath of app.artifactJsonPaths) {
           let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
           let ajJson: Record<string, any> = {};
@@ -884,7 +885,7 @@ const Dashboard = () => {
       
       // Update project XML files
       if (app.projectXmlPaths) {
-        console.log(`Updating project XML files for ${app.name}...`);
+        // console.log(`Updating project XML files for ${app.name}...`);
         for (const xmlPath of app.projectXmlPaths) {
           let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
           if (xmlContent && typeof xmlContent === 'string') {
@@ -896,7 +897,7 @@ const Dashboard = () => {
       
       // Commit all changes
       if (filesToCommit.length > 0) {
-        console.log(`Committing ${filesToCommit.length} files for ${app.name}...`);
+        // console.log(`Committing ${filesToCommit.length} files for ${app.name}...`);
         const committed = await azureApi.commitFiles(
           project,
           repoId,
@@ -907,7 +908,7 @@ const Dashboard = () => {
         if (!committed) {
           throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
         }
-        console.log(`Successfully migrated ${app.name}`);
+        // console.log(`Successfully migrated ${app.name}`);
         return true;
       } else {
         console.warn(`No files to commit for ${app.name}`);
@@ -941,7 +942,7 @@ const Dashboard = () => {
       
       for (const app of selectedApps) {
         try {
-          console.log(`Starting migration for: ${app.applicationName}`);
+          // console.log(`Starting migration for: ${app.applicationName}`);
           
           // Update application status to in_progress
           setApplications(prev => prev.map(a => 
@@ -964,7 +965,7 @@ const Dashboard = () => {
           ));
           
           successCount++;
-          console.log(`Successfully migrated: ${app.applicationName}`);
+          // console.log(`Successfully migrated: ${app.applicationName}`);
           
         } catch (error) {
           console.error(`Failed to migrate ${app.applicationName}:`, error);

@@ -118,7 +118,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     cloudHubDepPatterns.forEach(pattern => {
       const matches = updatedPom.match(pattern);
       if (matches) {
-        console.log('Found CloudHub dependencies to remove:', matches);
+        // console.log('Found CloudHub dependencies to remove:', matches);
         updatedPom = updatedPom.replace(pattern, '');
       }
     });
@@ -126,7 +126,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     // Update selected dependencies to their latest versions
     dependencies.forEach(dep => {
       if (selections.dependencies.includes(dep.artifactId) && dep.latestVersion && dep.latestVersion !== dep.version) {
-        console.log(`Updating ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
+        // console.log(`Updating ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
         
         const dependencyRegex = new RegExp(
           `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
@@ -161,7 +161,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       return xmlContent;
     }
     
-    console.log('Replacing selected CloudHub connectors with Logger connectors...');
+    // console.log('Replacing selected CloudHub connectors with Logger connectors...');
     
     // Add Logger namespace if not present
     if (!updatedXml.includes('xmlns:logger=')) {
@@ -227,7 +227,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
 
   // Enhanced GitHub migration function
   const migrateGitHubApplication = async (app: MuleApplication, selections: MigrationSelections) => {
-    console.log('Starting GitHub migration for app:', app.applicationName);
+    // console.log('Starting GitHub migration for app:', app.applicationName);
     
     const repoPath = app.repository.replace('https://github.com/', '');
     const newBranch = 'mulemigration';
@@ -276,7 +276,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          console.log('Successfully updated:', pomPath);
+          // console.log('Successfully updated:', pomPath);
         } catch (error) {
           console.error(`Failed to update ${pomPath}:`, error);
         }
@@ -314,7 +314,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          console.log('Successfully updated:', ajPath);
+          // console.log('Successfully updated:', ajPath);
         } catch (error) {
           console.error(`Failed to update ${ajPath}:`, error);
         }
@@ -344,7 +344,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
             },
             { headers: { Authorization: `token ${githubToken}` } }
           );
-          console.log('Successfully updated:', xmlPath);
+          // console.log('Successfully updated:', xmlPath);
         } catch (error) {
           console.error(`Failed to update ${xmlPath}:`, error);
         }
@@ -355,8 +355,8 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   // Enhanced Azure DevOps migration function
   const migrateAzureApplication = async (app: MuleApplication, selections: MigrationSelections) => {
     try {
-      console.log('Starting Azure DevOps migration for app:', app.applicationName);
-      console.log('Migration selections:', selections);
+      // console.log('Starting Azure DevOps migration for app:', app.applicationName);
+      // console.log('Migration selections:', selections);
       
       const urlParts = app.repository.split('/');
       const organization = urlParts[3];
@@ -365,7 +365,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       const azureApi = createAzureDevOpsAPI(organization, azureToken);
       
       // Create migration branch
-      console.log(`Creating migration branch for ${app.name}...`);
+      // console.log(`Creating migration branch for ${app.name}...`);
       const branchCreated = await azureApi.createBranch(project, repoId, 'mulemigration', app.branch);
       if (!branchCreated) {
         throw new Error('Failed to create migration branch. Please check your PAT permissions.');
@@ -375,7 +375,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Update POM files if selected
       if ((selections.muleRuntime || selections.dependencies.length > 0) && app.pomPaths) {
-        console.log(`Updating selected POM files for ${app.name}...`);
+        // console.log(`Updating selected POM files for ${app.name}...`);
         for (const pomPath of app.pomPaths) {
           let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
           if (pomXml && typeof pomXml === 'string') {
@@ -387,7 +387,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Update artifact JSON files if selected
       if ((selections.javaVersion || selections.minMuleVersion) && app.artifactJsonPaths) {
-        console.log(`Updating selected artifact JSON files for ${app.name}...`);
+        // console.log(`Updating selected artifact JSON files for ${app.name}...`);
         for (const ajPath of app.artifactJsonPaths) {
           let ajContent = await azureApi.getFileContent(project, repoId, ajPath);
           let ajJson: Record<string, any> = {};
@@ -417,7 +417,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Update project XML files if connectors are selected
       if (selections.connectors.length > 0 && app.projectXmlPaths) {
-        console.log(`Updating selected project XML files for ${app.name}...`);
+        // console.log(`Updating selected project XML files for ${app.name}...`);
         for (const xmlPath of app.projectXmlPaths) {
           let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
           if (xmlContent && typeof xmlContent === 'string') {
@@ -429,7 +429,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       
       // Commit all changes
       if (filesToCommit.length > 0) {
-        console.log(`Committing ${filesToCommit.length} files for ${app.name}...`);
+        // console.log(`Committing ${filesToCommit.length} files for ${app.name}...`);
         const committed = await azureApi.commitFiles(
           project,
           repoId,
@@ -440,7 +440,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         if (!committed) {
           throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
         }
-        console.log(`Successfully migrated selected components for ${app.name}`);
+        // console.log(`Successfully migrated selected components for ${app.name}`);
         return true;
       } else {
         console.warn(`No files to commit for ${app.name}`);
@@ -457,7 +457,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   const handleSelectiveMigration = async (app: MuleApplication, selections: MigrationSelections) => {
     setMigrating(true);
     try {
-      console.log('Starting selective migration for:', app.applicationName, 'with selections:', selections);
+      // console.log('Starting selective migration for:', app.applicationName, 'with selections:', selections);
       
       if (repositoryType === 'github') {
         await migrateGitHubApplication(app, selections);
