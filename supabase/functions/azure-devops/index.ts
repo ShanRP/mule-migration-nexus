@@ -11,6 +11,24 @@ function getAzureAuthHeader(token: string) {
   return 'Basic ' + btoa(':' + token);
 }
 
+// Helper to detect if string is base64 encoded
+function isBase64(str: string): boolean {
+  try {
+    // Check if string contains only valid base64 characters
+    const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+    if (!base64Regex.test(str)) {
+      return false;
+    }
+    
+    // Try to decode - if it works and re-encoding gives same result, it's base64
+    const decoded = atob(str);
+    const reencoded = btoa(decoded);
+    return reencoded === str;
+  } catch {
+    return false;
+  }
+}
+
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -211,82 +229,84 @@ async function handleFileContent(body: any) {
   try {
     console.log(`Fetching content for file: ${filePath}`);
     
-    // Try different API endpoints and content types
-    const endpoints = [
-      // First try with includeContent=true
-      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?path=${encodeURIComponent('/' + filePath)}&includeContent=true&api-version=7.0`,
-      // Fallback to basic endpoint
-      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?path=${encodeURIComponent('/' + filePath)}&api-version=7.0`
-    ];
+    // Use the direct file content API with proper encoding handling
+    const encodedPath = encodeURIComponent('/' + filePath);
+    const endpoint = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?path=${encodedPath}&includeContent=true&api-version=7.0`;
+    
+    console.log(`Fetching from endpoint: ${endpoint}`);
+    
+    const response = await fetch(endpoint, { 
+      headers: { 
+        'Authorization': getAzureAuthHeader(token), 
+        'Accept': 'application/json'
+      },
+    });
+    
+    if (!response.ok) {
+      if (response.status === 404) {
+        console.log(`File not found: ${filePath}`);
+        return new Response(JSON.stringify({ content: null }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      console.error(`Azure DevOps API error: ${response.status} - ${response.statusText}`);
+      throw new Error(`Azure DevOps API error: ${response.status}`);
+    }
 
-    for (const endpoint of endpoints) {
-      console.log(`Trying endpoint: ${endpoint}`);
+    const data = await response.json();
+    console.log(`Response data keys:`, Object.keys(data || {}));
+    
+    // Check if we have content in the response
+    if (data && data.content) {
+      console.log(`Raw content type: ${typeof data.content}, length: ${data.content.length}`);
+      console.log(`First 100 chars of content:`, data.content.substring(0, 100));
       
-      const response = await fetch(endpoint, { 
+      let content: string;
+      
+      // Smart content decoding - check if it's actually base64
+      if (isBase64(data.content)) {
+        try {
+          content = atob(data.content);
+          console.log(`Successfully decoded base64 content for: ${filePath} (${content.length} characters)`);
+        } catch (decodeError) {
+          console.error(`Base64 decode failed for ${filePath}:`, decodeError);
+          // If base64 decode fails, use content as-is
+          content = data.content;
+          console.log(`Using content as-is for: ${filePath}`);
+        }
+      } else {
+        // Content is already plain text
+        content = data.content;
+        console.log(`Content is plain text for: ${filePath} (${content.length} characters)`);
+      }
+      
+      return new Response(JSON.stringify({ content }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    } else if (data && data.url) {
+      // If no direct content but we have a URL, try fetching from the download URL
+      console.log(`No direct content, trying download URL: ${data.url}`);
+      
+      const downloadResponse = await fetch(data.url, {
         headers: { 
-          'Authorization': getAzureAuthHeader(token), 
-          'Accept': 'application/json'
+          'Authorization': getAzureAuthHeader(token),
+          'Accept': 'text/plain, application/xml, application/json, */*'
         },
       });
       
-      if (!response.ok) {
-        if (response.status === 404) {
-          console.log(`File not found: ${filePath}`);
-          continue; // Try next endpoint
-        }
-        console.error(`Azure DevOps API error: ${response.status} - ${response.statusText}`);
-        continue; // Try next endpoint
-      }
-
-      const data = await response.json();
-      console.log(`Response data keys:`, Object.keys(data || {}));
-      
-      // Check if we have content in the response
-      if (data && data.content) {
-        try {
-          console.log(`Raw content type: ${typeof data.content}, first 100 chars:`, data.content.substring(0, 100));
-          
-          // Try to decode base64 content
-          const content = atob(data.content);
-          console.log(`Successfully decoded content for: ${filePath} (${content.length} characters)`);
-          
-          return new Response(JSON.stringify({ content }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        } catch (decodeError) {
-          console.error(`Error decoding content for ${filePath}:`, decodeError);
-          console.log(`Trying to return content as-is`);
-          
-          // If base64 decode fails, try returning content as-is
-          return new Response(JSON.stringify({ content: data.content }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-      } else if (data && data.url) {
-        // If no content but we have a URL, try fetching from the download URL
-        console.log(`No direct content, trying download URL: ${data.url}`);
+      if (downloadResponse.ok) {
+        const content = await downloadResponse.text();
+        console.log(`Successfully fetched content via download URL for: ${filePath} (${content.length} characters)`);
         
-        const downloadResponse = await fetch(data.url, {
-          headers: { 
-            'Authorization': getAzureAuthHeader(token),
-            'Accept': 'text/plain, application/xml, */*'
-          },
+        return new Response(JSON.stringify({ content }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
-        
-        if (downloadResponse.ok) {
-          const content = await downloadResponse.text();
-          console.log(`Successfully fetched content via download URL for: ${filePath} (${content.length} characters)`);
-          
-          return new Response(JSON.stringify({ content }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        } else {
-          console.error(`Download URL failed: ${downloadResponse.status} - ${downloadResponse.statusText}`);
-        }
+      } else {
+        console.error(`Download URL failed: ${downloadResponse.status} - ${downloadResponse.statusText}`);
       }
     }
     
-    console.log(`No content found for: ${filePath} after trying all endpoints`);
+    console.log(`No content found for: ${filePath}`);
     return new Response(JSON.stringify({ content: null }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
