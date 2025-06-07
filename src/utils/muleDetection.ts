@@ -375,19 +375,21 @@ const getLatestVersionFromAPI = async (artifactId: string): Promise<string | nul
   try {
     console.log(`Fetching latest version for ${artifactId} from Supabase Edge Function...`);
     
-    // Use the Supabase client's functions.invoke method with the artifactId as a parameter
-    const { data, error } = await supabase.functions.invoke('mule-connector-versions', {
+    // Call the Edge Function with the artifactId as a URL parameter named 'name'
+    const response = await fetch(`https://kmlxkpfwtcrlgkiuwyqs.supabase.co/functions/v1/mule-connector-versions?name=${encodeURIComponent(artifactId)}`, {
       method: 'GET',
       headers: {
+        'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImttbHhrcGZ3dGNybGdraXV3eXFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDkwMDA4MTUsImV4cCI6MjA2NDU3NjgxNX0.iWd-WcLp4X9cdxhDTMT-eFzJotwD9wVI5wmLp9lJbTM`,
         'Content-Type': 'application/json'
-      },
-      body: { name: artifactId }
+      }
     });
     
-    if (error) {
-      console.error(`Error calling Edge Function for ${artifactId}:`, error);
+    if (!response.ok) {
+      console.error(`Error calling Edge Function for ${artifactId}: ${response.status} ${response.statusText}`);
       return null;
     }
+    
+    const data = await response.json();
     
     if (data && data.version) {
       console.log(`Successfully fetched version ${data.version} for ${artifactId} from Edge Function`);
