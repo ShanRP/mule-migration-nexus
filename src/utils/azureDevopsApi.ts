@@ -1,4 +1,3 @@
-
 import axios from 'axios';
 import { supabase } from "@/integrations/supabase/client";
 
@@ -26,6 +25,14 @@ interface AzureFileItem {
   gitObjectType: string;
 }
 
+interface MigrationRules {
+  javaVersion: string;
+  muleVersion: string;
+  minMuleVersion: string;
+  connectorReplacements: { from: string; to: string; }[];
+  dependencyVersions: { artifactId: string; version: string; }[];
+}
+
 export class AzureDevOpsAPI {
   private organization: string;
   private token: string;
@@ -44,7 +51,9 @@ export class AzureDevOpsAPI {
         token: this.token 
       };
       
-      // console.log('Calling edge function with body:', JSON.stringify(requestBody, null, 2));
+      console.log('=== CALLING AZURE DEVOPS EDGE FUNCTION ===');
+      console.log('Endpoint:', endpoint);
+      console.log('Data being sent:', requestBody);
       
       const { data: response, error } = await supabase.functions.invoke('azure-devops', {
         body: requestBody
@@ -174,22 +183,33 @@ export class AzureDevOpsAPI {
     }
   }
 
-  async commitFiles(projectName: string, repositoryId: string, branchName: string, files: Array<{path: string, content: string}>, message: string): Promise<boolean> {
+  async commitFiles(
+    projectName: string, 
+    repositoryId: string, 
+    branchName: string, 
+    files: Array<{path: string, content: string}>, 
+    message: string,
+    migrationRules?: MigrationRules
+  ): Promise<boolean> {
     try {
-      // console.log(`Committing ${files.length} files to branch ${branchName}...`);
+      console.log('=== COMMITTING FILES WITH MIGRATION RULES PRIORITY ===');
+      console.log(`Committing ${files.length} files to branch ${branchName}...`);
+      console.log('Migration Rules being sent to Azure DevOps:', migrationRules);
+      
       const response = await this.callEdgeFunction('commitFiles', {
         project: projectName,
         repositoryId,
         branchName,
         files,
-        message
+        message,
+        migrationRules // Pass migration rules to edge function
       });
       
       const success = response && response.success;
-      // console.log(`File commit ${success ? 'successful' : 'failed'}`);
+      console.log(`File commit ${success ? 'successful' : 'failed'} with rules priority`);
       return success;
     } catch (error) {
-      console.error('Error committing files:', error);
+      console.error('Error committing files with migration rules:', error);
       return false;
     }
   }

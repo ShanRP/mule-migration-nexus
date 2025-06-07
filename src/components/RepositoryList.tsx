@@ -114,7 +114,8 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   // Function to save rules configuration with priority logging
   const handleSaveRules = (rules: MigrationRules) => {
     setMigrationRules(rules);
-    console.log('Migration rules updated and will take HIGHEST PRIORITY:', rules);
+    console.log('=== MIGRATION RULES SAVED WITH HIGHEST PRIORITY ===');
+    console.log('Rules will override ALL default values:', rules);
     toast.success('Migration rules saved and will be prioritized during migration!');
   };
 
@@ -129,70 +130,50 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
 
   // PRIORITY SYSTEM: Rules ALWAYS take precedence over defaults
   const getRuleBasedJavaVersion = () => {
-    console.log('Checking Java version - Rules first, then defaults');
-    console.log('Rules Java version:', migrationRules.javaVersion);
-    console.log('Default Java version:', getLatestJavaVersion());
-    // Rules ALWAYS take priority
-    return migrationRules.javaVersion || getLatestJavaVersion();
+    const version = migrationRules.javaVersion || getLatestJavaVersion();
+    console.log(`Java Version Priority Check - Rules: ${migrationRules.javaVersion}, Using: ${version}`);
+    return version;
   };
 
   const getRuleBasedMuleVersion = () => {
-    console.log('Checking Mule version - Rules first, then defaults');
-    console.log('Rules Mule version:', migrationRules.muleVersion);
-    console.log('Default Mule version:', getLatestMuleVersion());
-    // Rules ALWAYS take priority
-    return migrationRules.muleVersion || getLatestMuleVersion();
+    const version = migrationRules.muleVersion || getLatestMuleVersion();
+    console.log(`Mule Version Priority Check - Rules: ${migrationRules.muleVersion}, Using: ${version}`);
+    return version;
   };
 
   const getRuleBasedMinMuleVersion = () => {
-    console.log('Checking Min Mule version - Rules first, then defaults');
-    console.log('Rules Min Mule version:', migrationRules.minMuleVersion);
-    console.log('Default Min Mule version:', getLatestMuleVersion());
-    // Rules ALWAYS take priority
-    return migrationRules.minMuleVersion || getLatestMuleVersion();
+    const version = migrationRules.minMuleVersion || getLatestMuleVersion();
+    console.log(`Min Mule Version Priority Check - Rules: ${migrationRules.minMuleVersion}, Using: ${version}`);
+    return version;
   };
   
   const getRuleBasedDependencyVersion = (artifactId: string, defaultVersion: string) => {
-    console.log(`Checking dependency version for ${artifactId} - Rules first, then defaults`);
-    
-    // FIRST PRIORITY: Check migration rules for custom dependency version
     const customRule = migrationRules.dependencyVersions.find(dep => dep.artifactId === artifactId);
-    if (customRule && customRule.version) {
-      console.log(`RULES PRIORITY: Using custom version ${customRule.version} for ${artifactId} (from migration rules)`);
-      return customRule.version;
-    }
-    
-    console.log(`No custom rule found for ${artifactId}, using default version: ${defaultVersion}`);
-    return defaultVersion;
+    const version = customRule?.version || defaultVersion;
+    console.log(`Dependency ${artifactId} Priority Check - Rules: ${customRule?.version}, Default: ${defaultVersion}, Using: ${version}`);
+    return version;
   };
   
   const getRuleBasedConnectorReplacement = (connectorName: string) => {
-    console.log(`Checking connector replacement for ${connectorName} - Rules first, then defaults`);
-    
-    // FIRST PRIORITY: Check migration rules for custom connector replacement
     const customReplacement = migrationRules.connectorReplacements.find(rep => 
       connectorName.toLowerCase().includes(rep.from.toLowerCase())
     );
-    
-    if (customReplacement && customReplacement.to) {
-      console.log(`RULES PRIORITY: Using custom replacement ${customReplacement.to} for ${connectorName} (from migration rules)`);
-      return customReplacement.to;
-    }
-    
-    console.log(`No custom rule found for ${connectorName}, using default replacement: logger`);
-    return 'logger';
+    const replacement = customReplacement?.to || 'logger';
+    console.log(`Connector ${connectorName} Priority Check - Rules: ${customReplacement?.to}, Using: ${replacement}`);
+    return replacement;
   };
 
   // Enhanced function to update dependency versions in POM XML with RULES PRIORITY
-  const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[], selections: MigrationSelections): string => {
+  const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[], selections: MigrationSelections, rules: MigrationRules): string => {
     let updatedPom = pomXml;
     
-    console.log('=== POM UPDATE: Migration Rules take HIGHEST PRIORITY ===');
+    console.log('=== POM UPDATE: MIGRATION RULES HAVE ABSOLUTE PRIORITY ===');
+    console.log('Active Migration Rules:', rules);
     
     // Update app.runtime version if selected - RULES FIRST
     if (selections.muleRuntime) {
-      const ruleBasedMuleVersion = getRuleBasedMuleVersion();
-      console.log(`Updating app.runtime to: ${ruleBasedMuleVersion} (prioritizing rules)`);
+      const ruleBasedMuleVersion = rules.muleVersion || getLatestMuleVersion();
+      console.log(`RULES PRIORITY: Setting app.runtime to ${ruleBasedMuleVersion}`);
       updatedPom = updatedPom.replace(
         /<app\.runtime>.*?<\/app\.runtime>/g,
         `<app.runtime>${ruleBasedMuleVersion}</app.runtime>`
@@ -215,14 +196,14 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
       }
     });
     
-    // Update selected dependencies - RULES TAKE PRIORITY OVER EVERYTHING
+    // Update selected dependencies - RULES TAKE ABSOLUTE PRIORITY
     dependencies.forEach(dep => {
       if (selections.dependencies.includes(dep.artifactId)) {
         // PRIORITY 1: Check migration rules first
         const ruleBasedVersion = getRuleBasedDependencyVersion(dep.artifactId, dep.latestVersion);
         
         if (ruleBasedVersion && ruleBasedVersion !== dep.version) {
-          console.log(`PRIORITY UPDATE: ${dep.artifactId} from ${dep.version} to ${ruleBasedVersion}`);
+          console.log(`ABSOLUTE PRIORITY UPDATE: ${dep.artifactId} from ${dep.version} to ${ruleBasedVersion} (Rules Priority)`);
           
           const dependencyRegex = new RegExp(
             `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
@@ -237,18 +218,19 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     // Clean up and add migration comment
     updatedPom = updatedPom.replace(/\n\s*\n\s*\n/g, '\n\n');
     
-    if (!updatedPom.includes('<!-- Updated for CloudHub 2.0 migration -->')) {
-      updatedPom = updatedPom + '\n<!-- Updated for CloudHub 2.0 migration -->';
+    if (!updatedPom.includes('<!-- Updated for CloudHub 2.0 migration with RULES PRIORITY -->')) {
+      updatedPom = updatedPom + '\n<!-- Updated for CloudHub 2.0 migration with RULES PRIORITY -->';
     }
     
     return updatedPom;
   };
 
   // Enhanced function to replace connectors with RULES PRIORITY
-  const replaceCloudHubConnectors = (xmlContent: string, selections: MigrationSelections): string => {
+  const replaceCloudHubConnectors = (xmlContent: string, selections: MigrationSelections, rules: MigrationRules): string => {
     let updatedXml = xmlContent;
     
-    console.log('=== CONNECTOR REPLACEMENT: Migration Rules take HIGHEST PRIORITY ===');
+    console.log('=== CONNECTOR REPLACEMENT: MIGRATION RULES HAVE ABSOLUTE PRIORITY ===');
+    console.log('Active Migration Rules:', rules);
     
     // Only process selected connectors
     const selectedCloudHubConnectors = selections.connectors.filter(name => 
@@ -261,7 +243,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     
     // PRIORITY 1: Get replacement connector from migration rules
     const ruleBasedReplacement = getRuleBasedConnectorReplacement('cloudhub');
-    console.log(`Using connector replacement: ${ruleBasedReplacement} (from migration rules priority)`);
+    console.log(`ABSOLUTE PRIORITY: Using connector replacement: ${ruleBasedReplacement} (from migration rules)`);
     
     // Add replacement namespace if not present
     if (ruleBasedReplacement === 'logger' && !updatedXml.includes('xmlns:logger=')) {
@@ -276,42 +258,42 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
     const cloudHubPatterns = [
       {
         pattern: /<cloudhub:create-notification[^>]*>[\s\S]*?<\/cloudhub:create-notification>/g,
-        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub notification replaced with ${ruleBasedReplacement} for CloudHub 2.0 migration (rules priority)" />`
+        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub notification replaced with ${ruleBasedReplacement} (RULES PRIORITY)" />`
       },
       {
         pattern: /<cloudhub:create-notification[^>]*\/>/g,
-        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub notification replaced with ${ruleBasedReplacement} for CloudHub 2.0 migration (rules priority)" />`
+        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub notification replaced with ${ruleBasedReplacement} (RULES PRIORITY)" />`
       },
       {
         pattern: /<cloudhub:list-notifications[^>]*>[\s\S]*?<\/cloudhub:list-notifications>/g,
-        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub list notifications replaced with ${ruleBasedReplacement} for CloudHub 2.0 migration (rules priority)" />`
+        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub list notifications replaced with ${ruleBasedReplacement} (RULES PRIORITY)" />`
       },
       {
         pattern: /<cloudhub:list-notifications[^>]*\/>/g,
-        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub list notifications replaced with ${ruleBasedReplacement} for CloudHub 2.0 migration (rules priority)" />`
+        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub list notifications replaced with ${ruleBasedReplacement} (RULES PRIORITY)" />`
       },
       {
         pattern: /<cloudhub:get-application[^>]*>[\s\S]*?<\/cloudhub:get-application>/g,
-        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub get application replaced with ${ruleBasedReplacement} for CloudHub 2.0 migration (rules priority)" />`
+        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub get application replaced with ${ruleBasedReplacement} (RULES PRIORITY)" />`
       },
       {
         pattern: /<cloudhub:get-application[^>]*\/>/g,
-        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub get application replaced with ${ruleBasedReplacement} for CloudHub 2.0 migration (rules priority)" />`
+        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub get application replaced with ${ruleBasedReplacement} (RULES PRIORITY)" />`
       },
       {
         pattern: /<cloudhub:[^>]*>[\s\S]*?<\/cloudhub:[^>]*>/g,
-        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub operation replaced with ${ruleBasedReplacement} for CloudHub 2.0 migration (rules priority)" />`
+        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub operation replaced with ${ruleBasedReplacement} (RULES PRIORITY)" />`
       },
       {
         pattern: /<cloudhub:[^>]*\/>/g,
-        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub operation replaced with ${ruleBasedReplacement} for CloudHub 2.0 migration (rules priority)" />`
+        replacement: `<${ruleBasedReplacement}:log level="INFO" message="CloudHub operation replaced with ${ruleBasedReplacement} (RULES PRIORITY)" />`
       }
     ];
     
     cloudHubPatterns.forEach(({ pattern, replacement }) => {
       const matches = updatedXml.match(pattern);
       if (matches) {
-        console.log(`RULES PRIORITY: Replacing CloudHub connectors with ${ruleBasedReplacement}:`, matches);
+        console.log(`ABSOLUTE PRIORITY: Replacing CloudHub connectors with ${ruleBasedReplacement}:`, matches);
         updatedXml = updatedXml.replace(pattern, replacement);
       }
     });
@@ -326,10 +308,10 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   };
 
   // Enhanced GitHub migration function with RULES PRIORITY
-  const migrateGitHubApplication = async (app: MuleApplication, selections: MigrationSelections) => {
-    console.log('=== GITHUB MIGRATION: Applying Rules with HIGHEST PRIORITY ===');
+  const migrateGitHubApplication = async (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules) => {
+    console.log('=== GITHUB MIGRATION: APPLYING RULES WITH ABSOLUTE PRIORITY ===');
     console.log('Application:', app.applicationName);
-    console.log('Current Migration Rules:', migrationRules);
+    console.log('Migration Rules (ABSOLUTE PRIORITY):', rules);
     console.log('Selected Migration Items:', selections);
     
     const repoPath = app.repository.replace('https://github.com/', '');
@@ -367,12 +349,12 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           const pomSha = pomRes.data.sha;
           const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
           
-          const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections);
+          const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections, rules);
           
           await axios.put(
             `https://api.github.com/repos/${repoPath}/contents/${pomPath}`,
             {
-              message: `Mule migration: update selected dependencies for CloudHub 2.0 with rules priority - ${pomPath}`,
+              message: `Mule migration: update with RULES PRIORITY - ${pomPath}`,
               content: btoa(updatedPom),
               branch: newBranch,
               sha: pomSha
@@ -399,21 +381,21 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           const updatedAj = { ...ajJson };
           
           if (selections.javaVersion) {
-            const ruleBasedJavaVersion = getRuleBasedJavaVersion();
-            console.log(`RULES PRIORITY: Setting Java version to ${ruleBasedJavaVersion}`);
+            const ruleBasedJavaVersion = rules.javaVersion || getLatestJavaVersion();
+            console.log(`ABSOLUTE PRIORITY: Setting Java version to ${ruleBasedJavaVersion} (from rules)`);
             updatedAj.javaSpecificationVersions = [ruleBasedJavaVersion];
           }
           
           if (selections.minMuleVersion) {
-            const ruleBasedMinMuleVersion = getRuleBasedMinMuleVersion();
-            console.log(`RULES PRIORITY: Setting min Mule version to ${ruleBasedMinMuleVersion}`);
+            const ruleBasedMinMuleVersion = rules.minMuleVersion || getLatestMuleVersion();
+            console.log(`ABSOLUTE PRIORITY: Setting min Mule version to ${ruleBasedMinMuleVersion} (from rules)`);
             updatedAj.minMuleVersion = ruleBasedMinMuleVersion;
           }
           
           await axios.put(
             `https://api.github.com/repos/${repoPath}/contents/${ajPath}`,
             {
-              message: `Mule migration: update artifact configuration for CloudHub 2.0 with rules priority - ${ajPath}`,
+              message: `Mule migration: update artifact with RULES PRIORITY - ${ajPath}`,
               content: btoa(JSON.stringify(updatedAj, null, 2)),
               branch: newBranch,
               sha: ajSha
@@ -437,12 +419,12 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           const xmlSha = xmlRes.data.sha;
           const xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
           
-          const updatedXml = replaceCloudHubConnectors(xmlContent, selections) + '\n<!-- Updated for CloudHub 2.0 migration with rules priority -->';
+          const updatedXml = replaceCloudHubConnectors(xmlContent, selections, rules) + '\n<!-- Updated for CloudHub 2.0 migration with RULES PRIORITY -->';
           
           await axios.put(
             `https://api.github.com/repos/${repoPath}/contents/${xmlPath}`,
             {
-              message: `Mule migration: update selected connectors for CloudHub 2.0 with rules priority - ${xmlPath}`,
+              message: `Mule migration: update connectors with RULES PRIORITY - ${xmlPath}`,
               content: btoa(updatedXml),
               branch: newBranch,
               sha: xmlSha
@@ -457,11 +439,11 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   };
 
   // Enhanced Azure DevOps migration function with RULES PRIORITY
-  const migrateAzureApplication = async (app: MuleApplication, selections: MigrationSelections) => {
+  const migrateAzureApplication = async (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules) => {
     try {
-      console.log('=== AZURE DEVOPS MIGRATION: Applying Rules with HIGHEST PRIORITY ===');
+      console.log('=== AZURE DEVOPS MIGRATION: APPLYING RULES WITH ABSOLUTE PRIORITY ===');
       console.log('Application:', app.applicationName);
-      console.log('Current Migration Rules:', migrationRules);
+      console.log('Migration Rules (ABSOLUTE PRIORITY):', rules);
       console.log('Selected Migration Items:', selections);
       
       const urlParts = app.repository.split('/');
@@ -483,7 +465,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         for (const pomPath of app.pomPaths) {
           let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
           if (pomXml && typeof pomXml === 'string') {
-            const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections);
+            const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections, rules);
             filesToCommit.push({ path: pomPath, content: updatedPom });
           }
         }
@@ -507,14 +489,14 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           const updatedAj = { ...ajJson };
           
           if (selections.javaVersion) {
-            const ruleBasedJavaVersion = getRuleBasedJavaVersion();
-            console.log(`RULES PRIORITY: Setting Java version to ${ruleBasedJavaVersion}`);
+            const ruleBasedJavaVersion = rules.javaVersion || getLatestJavaVersion();
+            console.log(`ABSOLUTE PRIORITY: Setting Java version to ${ruleBasedJavaVersion} (from rules)`);
             updatedAj.javaSpecificationVersions = [ruleBasedJavaVersion];
           }
           
           if (selections.minMuleVersion) {
-            const ruleBasedMinMuleVersion = getRuleBasedMinMuleVersion();
-            console.log(`RULES PRIORITY: Setting min Mule version to ${ruleBasedMinMuleVersion}`);
+            const ruleBasedMinMuleVersion = rules.minMuleVersion || getLatestMuleVersion();
+            console.log(`ABSOLUTE PRIORITY: Setting min Mule version to ${ruleBasedMinMuleVersion} (from rules)`);
             updatedAj.minMuleVersion = ruleBasedMinMuleVersion;
           }
           
@@ -527,20 +509,25 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         for (const xmlPath of app.projectXmlPaths) {
           let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
           if (xmlContent && typeof xmlContent === 'string') {
-            const updatedXml = replaceCloudHubConnectors(xmlContent, selections) + '\n<!-- Updated for CloudHub 2.0 migration with rules priority -->';
+            const updatedXml = replaceCloudHubConnectors(xmlContent, selections, rules) + '\n<!-- Updated for CloudHub 2.0 migration with RULES PRIORITY -->';
             filesToCommit.push({ path: xmlPath, content: updatedXml });
           }
         }
       }
       
-      // Commit all changes
+      // Commit all changes with rules data
       if (filesToCommit.length > 0) {
+        console.log('=== SENDING MIGRATION RULES TO AZURE DEVOPS EDGE FUNCTION ===');
+        console.log('Migration Rules being sent:', rules);
+        console.log('Files to commit:', filesToCommit.length);
+        
         const committed = await azureApi.commitFiles(
           project,
           repoId,
           'mulemigration',
           filesToCommit,
-          'Mule migration: update selected components for CloudHub 2.0 with rules priority'
+          'Mule migration: update with RULES PRIORITY',
+          rules  // Pass rules to the API
         );
         if (!committed) {
           throw new Error('Failed to commit migration changes. Please check your PAT permissions.');
@@ -558,18 +545,18 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
   };
 
   // Handle selective migration from dialog with RULES PRIORITY
-  const handleSelectiveMigration = async (app: MuleApplication, selections: MigrationSelections) => {
+  const handleSelectiveMigration = async (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules) => {
     setMigrating(true);
     try {
-      console.log('=== STARTING SELECTIVE MIGRATION WITH RULES PRIORITY ===');
+      console.log('=== STARTING SELECTIVE MIGRATION WITH RULES ABSOLUTE PRIORITY ===');
       console.log('Application:', app.applicationName);
       console.log('Migration selections:', selections);
-      console.log('Current migration rules (HIGHEST PRIORITY):', migrationRules);
+      console.log('Migration rules (ABSOLUTE PRIORITY):', rules);
       
       if (repositoryType === 'github') {
-        await migrateGitHubApplication(app, selections);
+        await migrateGitHubApplication(app, selections, rules);
       } else if (repositoryType === 'azure_devops') {
-        await migrateAzureApplication(app, selections);
+        await migrateAzureApplication(app, selections, rules);
       }
       
       // Update application status
@@ -579,7 +566,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
           : a
       ));
       
-      toast.success(`Migration completed for ${app.applicationName} with rules priority!`);
+      toast.success(`Migration completed for ${app.applicationName} with RULES PRIORITY!`);
     } catch (err) {
       console.error('Selective migration error:', err);
       setApplications(prev => prev.map(a => 
@@ -684,10 +671,10 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
                 variant="outline" 
                 size="sm" 
                 onClick={() => setRulesDialogOpen(true)}
-                className="flex items-center space-x-1 bg-yellow-50 border-yellow-300 text-yellow-800 hover:bg-yellow-100"
+                className="flex items-center space-x-1 bg-red-50 border-red-300 text-red-800 hover:bg-red-100"
               >
                 <Settings className="h-4 w-4" />
-                <span>Rules (Priority)</span>
+                <span>Rules (ABSOLUTE PRIORITY)</span>
               </Button>
               <Button variant="outline" size="sm" onClick={selectAll}>
                 Select All
@@ -699,18 +686,34 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
                 onClick={() => onMigrateAll(migrationRules)}
                 disabled={selectedCount === 0 || migrating}
                 size="lg"
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-red-600 hover:bg-red-700"
               >
                 <RefreshCw className="h-4 w-4 mr-2" />
-                {migrating ? 'Migrating...' : `Migrate All Selected (${selectedCount})`}
+                {migrating ? 'Migrating with Rules Priority...' : `Migrate All (${selectedCount}) - Rules Priority`}
               </Button>
             </div>
           </CardTitle>
           <CardDescription>
-            Select applications and view details to customize your CloudHub 2.0 migration. Use Rules to configure custom versions and replacements with <strong>HIGHEST PRIORITY</strong>.
+            Select applications and view details to customize your CloudHub 2.0 migration. <strong>Migration rules configured will take ABSOLUTE PRIORITY over all defaults.</strong>
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {/* Migration Rules Status */}
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+            <div className="flex items-center space-x-2">
+              <Settings className="h-4 w-4 text-red-600" />
+              <div>
+                <p className="font-semibold text-red-800">Active Migration Rules (ABSOLUTE PRIORITY)</p>
+                <p className="text-sm text-red-700">
+                  Java: <strong>{migrationRules.javaVersion}</strong> | 
+                  Mule: <strong>{migrationRules.muleVersion}</strong> | 
+                  MinMule: <strong>{migrationRules.minMuleVersion}</strong> | 
+                  Custom Dependencies: <strong>{migrationRules.dependencyVersions.length}</strong> | 
+                  Connector Replacements: <strong>{migrationRules.connectorReplacements.length}</strong>
+                </p>
+              </div>
+            </div>
+          </div>
           <div className="overflow-x-auto">
             <Table className="min-w-[1600px] border border-gray-300 border-collapse">
               <TableHeader>
@@ -853,6 +856,7 @@ const RepositoryList: React.FC<RepositoryListProps> = ({
         onMigrate={handleSelectiveMigration}
         onSaveSelections={handleSaveSelections}
         repositoryType={repositoryType || 'github'}
+        migrationRules={migrationRules}
       />
 
       {/* Rules Dialog */}

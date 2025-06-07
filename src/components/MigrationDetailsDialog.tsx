@@ -1,9 +1,10 @@
+
 import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ExternalLink, CheckCircle2, AlertTriangle, Save } from 'lucide-react';
+import { ExternalLink, CheckCircle2, AlertTriangle, Save, Settings } from 'lucide-react';
 import { getLatestMuleVersion, getLatestJavaVersion } from '@/utils/muleDetection';
 import { toast } from 'sonner';
 
@@ -21,6 +22,14 @@ interface MuleConnector {
   namespace: string;
   isDeprecated: boolean;
   cloudHub2Alternative?: string;
+}
+
+interface MigrationRules {
+  javaVersion: string;
+  muleVersion: string;
+  minMuleVersion: string;
+  connectorReplacements: { from: string; to: string; }[];
+  dependencyVersions: { artifactId: string; version: string; }[];
 }
 
 interface MuleApplication {
@@ -56,9 +65,10 @@ interface MigrationDetailsDialogProps {
   application: MuleApplication | null;
   isOpen: boolean;
   onClose: () => void;
-  onMigrate: (app: MuleApplication, selections: MigrationSelections) => Promise<void>;
+  onMigrate: (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules) => Promise<void>;
   onSaveSelections: (app: MuleApplication, selections: MigrationSelections) => void;
   repositoryType: string;
+  migrationRules: MigrationRules;
 }
 
 const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
@@ -67,7 +77,8 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
   onClose,
   onMigrate,
   onSaveSelections,
-  repositoryType
+  repositoryType,
+  migrationRules
 }) => {
   const [selections, setSelections] = useState<MigrationSelections>({
     muleRuntime: true,
@@ -81,7 +92,6 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
   // Initialize selections when application changes
   useEffect(() => {
     if (application) {
-      // Load saved selections if they exist, otherwise default to all selected
       if (application.savedSelections) {
         setSelections(application.savedSelections);
       } else {
@@ -95,6 +105,19 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
       }
     }
   }, [application]);
+
+  // Get rule-based versions (HIGHEST PRIORITY)
+  const getRuleBasedJavaVersion = () => {
+    return migrationRules.javaVersion || getLatestJavaVersion();
+  };
+
+  const getRuleBasedMuleVersion = () => {
+    return migrationRules.muleVersion || getLatestMuleVersion();
+  };
+
+  const getRuleBasedMinMuleVersion = () => {
+    return migrationRules.minMuleVersion || getLatestMuleVersion();
+  };
 
   const handleSelectAll = () => {
     if (application) {
@@ -146,9 +169,14 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
   const handleMigrate = async () => {
     if (!application) return;
     
+    console.log('=== MIGRATION WITH RULES PRIORITY ===');
+    console.log('Migration Rules (HIGHEST PRIORITY):', migrationRules);
+    console.log('Selections:', selections);
+    
     setMigrating(true);
     try {
-      await onMigrate(application, selections);
+      // Pass migration rules to the migration function
+      await onMigrate(application, selections, migrationRules);
       onClose();
     } catch (error) {
       console.error('Migration failed:', error);
@@ -168,45 +196,66 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
         <DialogHeader>
           <DialogTitle>Migration Details: {application?.applicationName}</DialogTitle>
           <DialogDescription>
-            Select components to migrate to CloudHub 2.0
+            Select components to migrate to CloudHub 2.0. <strong>Migration rules will take HIGHEST PRIORITY.</strong>
           </DialogDescription>
         </DialogHeader>
 
         {application && (
           <div className="space-y-6">
+            {/* Rules Priority Warning */}
+            <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <div className="flex items-center space-x-2">
+                <Settings className="h-5 w-5 text-yellow-600" />
+                <div>
+                  <p className="font-semibold text-yellow-800">Migration Rules Active (HIGHEST PRIORITY)</p>
+                  <p className="text-sm text-yellow-700">
+                    Java: <strong>{getRuleBasedJavaVersion()}</strong> | 
+                    Mule: <strong>{getRuleBasedMuleVersion()}</strong> | 
+                    MinMule: <strong>{getRuleBasedMinMuleVersion()}</strong>
+                  </p>
+                </div>
+              </div>
+            </div>
+
             {/* Runtime Updates */}
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <div className="flex-1">
                   <div className="font-medium">Mule Runtime</div>
                   <div className="text-sm text-gray-600">
-                    Current: {application.muleRuntime} → Latest: <span className="font-bold text-blue-600">{getLatestMuleVersion()}</span>
+                    Current: {application.muleRuntime} → Rules Priority: <span className="font-bold text-red-600">{getRuleBasedMuleVersion()}</span>
                   </div>
                 </div>
-                {application.muleRuntime !== getLatestMuleVersion() && (
-                  <Badge variant="outline" className="text-yellow-600">Update Available</Badge>
-                )}
+                <Checkbox
+                  checked={selections.muleRuntime}
+                  onCheckedChange={(checked) => setSelections(prev => ({ ...prev, muleRuntime: !!checked }))}
+                />
               </div>
 
               <div className="flex justify-between items-center">
                 <div className="flex-1">
                   <div className="font-medium">Java Version (mule-artifact.json)</div>
                   <div className="text-sm text-gray-600">
-                    Current: {application.javaVersion} → Latest: <span className="font-bold text-blue-600">{getLatestJavaVersion()}</span>
+                    Current: {application.javaVersion} → Rules Priority: <span className="font-bold text-red-600">{getRuleBasedJavaVersion()}</span>
                   </div>
                 </div>
-                {application.javaVersion !== getLatestJavaVersion() && (
-                  <Badge variant="outline" className="text-yellow-600">Update Available</Badge>
-                )}
+                <Checkbox
+                  checked={selections.javaVersion}
+                  onCheckedChange={(checked) => setSelections(prev => ({ ...prev, javaVersion: !!checked }))}
+                />
               </div>
 
               <div className="flex justify-between items-center">
                 <div className="flex-1">
                   <div className="font-medium">MinMuleVersion (mule-artifact.json)</div>
                   <div className="text-sm text-gray-600">
-                    Sync with Mule Runtime: <span className="font-bold text-blue-600">{getLatestMuleVersion()}</span>
+                    Rules Priority: <span className="font-bold text-red-600">{getRuleBasedMinMuleVersion()}</span>
                   </div>
                 </div>
+                <Checkbox
+                  checked={selections.minMuleVersion}
+                  onCheckedChange={(checked) => setSelections(prev => ({ ...prev, minMuleVersion: !!checked }))}
+                />
               </div>
             </div>
 
@@ -225,34 +274,38 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                   </div>
                 </div>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {application.dependencies.map(dep => (
-                    <div key={dep.artifactId} className="flex items-center space-x-3 p-3 border rounded-lg">
-                      <Checkbox
-                        checked={selections.dependencies.includes(dep.artifactId)}
-                        onCheckedChange={(checked) => handleDependencyToggle(dep.artifactId)}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium truncate">{dep.artifactId}</div>
-                        <div className="text-sm text-gray-600">
-                          {dep.groupId}
+                  {application.dependencies.map(dep => {
+                    // Check if there's a rule-based version for this dependency
+                    const ruleBasedVersion = migrationRules.dependencyVersions.find(
+                      rule => rule.artifactId === dep.artifactId
+                    )?.version || dep.latestVersion;
+                    
+                    return (
+                      <div key={dep.artifactId} className="flex items-center space-x-3 p-3 border rounded-lg">
+                        <Checkbox
+                          checked={selections.dependencies.includes(dep.artifactId)}
+                          onCheckedChange={(checked) => handleDependencyToggle(dep.artifactId)}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium truncate">{dep.artifactId}</div>
+                          <div className="text-sm text-gray-600">
+                            {dep.groupId}
+                          </div>
+                          <div className="text-sm">
+                            Current: {dep.version} → Rules Priority: <span className="font-bold text-red-600">{ruleBasedVersion}</span>
+                          </div>
                         </div>
-                        <div className="text-sm">
-                          Current: {dep.version} → Latest: <span className="font-bold text-blue-600">{dep.latestVersion}</span>
+                        <div className="flex flex-col space-y-1">
+                          {ruleBasedVersion !== dep.version && (
+                            <Badge variant="destructive" className="text-xs">Rules Override</Badge>
+                          )}
+                          {dep.isDeprecated && (
+                            <Badge variant="destructive" className="text-xs">Deprecated</Badge>
+                          )}
                         </div>
                       </div>
-                      <div className="flex flex-col space-y-1">
-                        {dep.version !== dep.latestVersion && (
-                          <Badge variant="outline" className="text-yellow-600 text-xs">Update Available</Badge>
-                        )}
-                        {dep.isDeprecated && (
-                          <Badge variant="destructive" className="text-xs">Deprecated</Badge>
-                        )}
-                        {dep.replacement && (
-                          <Badge variant="secondary" className="text-xs">Replace: {dep.replacement}</Badge>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -264,25 +317,37 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                   <div className="font-medium">Connectors</div>
                 </div>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {application.connectors.filter(conn => !conn.isDeprecated).map(conn => (
-                    <div key={conn.name} className="flex items-center space-x-3 p-3 border rounded-lg">
-                      <Checkbox
-                        checked={selections.connectors.includes(conn.name)}
-                        onCheckedChange={(checked) => handleConnectorToggle(conn.name)}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium truncate">{conn.name}</div>
-                        <div className="text-sm text-gray-600 truncate">{conn.namespace}</div>
+                  {application.connectors.filter(conn => !conn.isDeprecated).map(conn => {
+                    // Check if there's a rule-based replacement for this connector
+                    const ruleBasedReplacement = migrationRules.connectorReplacements.find(
+                      rule => conn.name.toLowerCase().includes(rule.from.toLowerCase())
+                    )?.to;
+                    
+                    return (
+                      <div key={conn.name} className="flex items-center space-x-3 p-3 border rounded-lg">
+                        <Checkbox
+                          checked={selections.connectors.includes(conn.name)}
+                          onCheckedChange={(checked) => handleConnectorToggle(conn.name)}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium truncate">{conn.name}</div>
+                          <div className="text-sm text-gray-600 truncate">{conn.namespace}</div>
+                        </div>
+                        <div className="flex flex-col space-y-1">
+                          {ruleBasedReplacement && (
+                            <Badge variant="destructive" className="text-xs">
+                              Rules: {ruleBasedReplacement}
+                            </Badge>
+                          )}
+                          {conn.cloudHub2Alternative && (
+                            <Badge variant="outline" className="text-blue-600 text-xs">
+                              CloudHub 2.0: {conn.cloudHub2Alternative}
+                            </Badge>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex flex-col space-y-1">
-                        {conn.cloudHub2Alternative && (
-                          <Badge variant="outline" className="text-blue-600 text-xs">
-                            CloudHub 2.0: {conn.cloudHub2Alternative}
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -296,26 +361,32 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
                   </div>
                 </div>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {application.connectors.filter(conn => conn.isDeprecated).map(conn => (
-                    <div key={conn.name} className="flex items-center space-x-3 p-3 border rounded-lg bg-red-50">
-                      <Checkbox
-                        checked={selections.connectors.includes(conn.name)}
-                        onCheckedChange={(checked) => handleConnectorToggle(conn.name)}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium truncate">{conn.name}</div>
-                        <div className="text-sm text-gray-600 truncate">{conn.namespace}</div>
+                  {application.connectors.filter(conn => conn.isDeprecated).map(conn => {
+                    const ruleBasedReplacement = migrationRules.connectorReplacements.find(
+                      rule => conn.name.toLowerCase().includes(rule.from.toLowerCase())
+                    )?.to;
+                    
+                    return (
+                      <div key={conn.name} className="flex items-center space-x-3 p-3 border rounded-lg bg-red-50">
+                        <Checkbox
+                          checked={selections.connectors.includes(conn.name)}
+                          onCheckedChange={(checked) => handleConnectorToggle(conn.name)}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium truncate">{conn.name}</div>
+                          <div className="text-sm text-gray-600 truncate">{conn.namespace}</div>
+                        </div>
+                        <div className="flex flex-col space-y-1">
+                          <Badge variant="destructive" className="text-xs">Deprecated</Badge>
+                          {ruleBasedReplacement && (
+                            <Badge variant="destructive" className="text-xs">
+                              Rules: {ruleBasedReplacement}
+                            </Badge>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex flex-col space-y-1">
-                        <Badge variant="destructive" className="text-xs">Deprecated</Badge>
-                        {conn.cloudHub2Alternative && (
-                          <Badge variant="outline" className="text-blue-600 text-xs">
-                            CloudHub 2.0: {conn.cloudHub2Alternative}
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -328,9 +399,9 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
               <Button 
                 onClick={handleMigrate}
                 disabled={migrating || !hasSelections}
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-red-600 hover:bg-red-700"
               >
-                {migrating ? 'Migrating...' : 'Start Migration'}
+                {migrating ? 'Migrating with Rules Priority...' : 'Start Migration (Rules Priority)'}
               </Button>
             </div>
           </div>
