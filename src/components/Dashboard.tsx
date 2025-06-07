@@ -189,49 +189,45 @@ const Dashboard = () => {
         let applicationInfo = null;
         
         for (const pomPath of pomFiles) {
+          console.log(`Processing pom.xml: ${pomPath}`);
           const pomXml = await fetchGitHubFileContent(repo.full_name, pomPath, token);
           if (pomXml && isMuleApplication(pomXml)) {
             console.log(`Found Mule application in: ${pomPath}`);
             isMuleRepo = true;
             mainPomPath = pomPath;
             
-            const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
-            const artifactJsonPath = `${pomDir}/src/main/mule/mule-artifact.json`;
+            const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/')) || '';
             let artifactJson = null;
             
-            console.log(`Looking for artifact JSON at: ${artifactJsonPath}`);
-            const artifactJsonContent = await fetchGitHubFileContent(repo.full_name, artifactJsonPath, token);
-            if (artifactJsonContent) {
-              try {
-                artifactJson = JSON.parse(artifactJsonContent);
-                console.log('Successfully parsed artifact JSON:', artifactJson);
-              } catch (error) {
-                console.log('Error parsing artifact JSON:', error);
-              }
-            } else {
-              // Try alternative paths
-              const altPaths = [
-                `${pomDir}/mule-artifact.json`,
-                `${pomDir}/src/main/resources/mule-artifact.json`
-              ];
-              
-              for (const altPath of altPaths) {
-                console.log(`Trying alternative path: ${altPath}`);
-                const altContent = await fetchGitHubFileContent(repo.full_name, altPath, token);
-                if (altContent) {
-                  try {
-                    artifactJson = JSON.parse(altContent);
-                    console.log('Successfully parsed artifact JSON from alternative path:', artifactJson);
-                    break;
-                  } catch (error) {
-                    console.log('Error parsing artifact JSON from alternative path:', error);
-                  }
+            const artifactJsonPaths = [
+              `${pomDir}/src/main/mule/mule-artifact.json`,
+              `${pomDir}/mule-artifact.json`,
+              `${pomDir}/src/main/resources/mule-artifact.json`
+            ].filter(path => path !== '/');
+            
+            for (const ajPath of artifactJsonPaths) {
+              console.log(`Looking for artifact JSON at: ${ajPath}`);
+              const artifactJsonContent = await fetchGitHubFileContent(repo.full_name, ajPath, token);
+              if (artifactJsonContent) {
+                try {
+                  artifactJson = JSON.parse(artifactJsonContent);
+                  console.log('Successfully parsed artifact JSON:', artifactJson);
+                  break;
+                } catch (error) {
+                  console.log('Error parsing artifact JSON:', error);
                 }
               }
             }
             
-            applicationInfo = extractMuleInfo(pomXml, artifactJson);
-            break; // Use the first valid Mule application found
+            applicationInfo = await extractMuleInfo(pomXml, artifactJson);
+            console.log('Extracted Mule info:', { 
+              applicationName: applicationInfo.applicationName, 
+              muleRuntime: applicationInfo.muleRuntime, 
+              muleVersion: applicationInfo.muleVersion, 
+              javaVersion: applicationInfo.javaVersion, 
+              dependencies: applicationInfo.dependencies.length 
+            });
+            break;
           }
         }
         
@@ -412,7 +408,7 @@ const Dashboard = () => {
                 }
               }
               
-              applicationInfo = extractMuleInfo(pomXml, artifactJson);
+              applicationInfo = await extractMuleInfo(pomXml, artifactJson);
               console.log('Extracted Mule info:', { 
                 applicationName: applicationInfo.applicationName, 
                 muleRuntime: applicationInfo.muleRuntime, 

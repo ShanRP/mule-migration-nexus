@@ -1,3 +1,5 @@
+import axios from 'axios';
+
 interface MuleDependency {
   groupId: string;
   artifactId: string;
@@ -62,7 +64,7 @@ export const isMuleApplication = (pomXml: string): boolean => {
   return isMatch;
 };
 
-export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
+export const extractMuleInfo = async (pomXml: string, artifactJson?: any) => {
   console.log('Extracting Mule information...');
   console.log('Artifact JSON received:', artifactJson);
 
@@ -185,35 +187,37 @@ export const extractMuleInfo = (pomXml: string, artifactJson?: any) => {
 
   // Dependencies extraction with better error handling
   const depMatches = [...pomXml.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)];
-  const dependencies = depMatches
-    .map(match => {
-      const depXml = match[1];
-      const groupId = (depXml.match(/<groupId>(.*?)<\/groupId>/) || [])[1] || '';
-      const artifactId = (depXml.match(/<artifactId>(.*?)<\/artifactId>/) || [])[1] || '';
-      const version = (depXml.match(/<version>(.*?)<\/version>/) || [])[1] || '';
-      return { groupId, artifactId, version };
-    })
-    .filter(dep => 
-      dep.groupId && dep.artifactId && (
-        dep.groupId.includes('mule') || 
-        dep.artifactId.includes('mule') ||
-        dep.groupId.includes('org.mule') ||
-        dep.groupId.includes('com.mulesoft')
+  const dependencies = await Promise.all(
+    depMatches
+      .map(match => {
+        const depXml = match[1];
+        const groupId = (depXml.match(/<groupId>(.*?)<\/groupId>/) || [])[1] || '';
+        const artifactId = (depXml.match(/<artifactId>(.*?)<\/artifactId>/) || [])[1] || '';
+        const version = (depXml.match(/<version>(.*?)<\/version>/) || [])[1] || '';
+        return { groupId, artifactId, version };
+      })
+      .filter(dep => 
+        dep.groupId && dep.artifactId && (
+          dep.groupId.includes('mule') || 
+          dep.artifactId.includes('mule') ||
+          dep.groupId.includes('org.mule') ||
+          dep.groupId.includes('com.mulesoft')
+        )
       )
-    )
-    .map(dep => {
-      const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
-      const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
-      const latestVersion = getLatestVersion(dep.groupId, dep.artifactId, dep.version);
-      return {
-        groupId: dep.groupId,
-        artifactId: dep.artifactId,
-        version: dep.version,
-        latestVersion,
-        isDeprecated,
-        replacement
-      };
-    });
+      .map(async dep => {
+        const isDeprecated = checkIfDeprecated(dep.groupId, dep.artifactId);
+        const replacement = getReplacementDependency(dep.groupId, dep.artifactId);
+        const latestVersion = await getLatestVersion(dep.groupId, dep.artifactId, dep.version);
+        return {
+          groupId: dep.groupId,
+          artifactId: dep.artifactId,
+          version: dep.version,
+          latestVersion,
+          isDeprecated,
+          replacement
+        };
+      })
+  );
 
   console.log('Final extraction results:', { applicationName, muleRuntime, muleVersion, javaVersion, dependencies: dependencies.length });
   return { applicationName, muleRuntime, muleVersion, javaVersion, dependencies };
@@ -421,7 +425,63 @@ const latestConnectorVersions: Record<string, string> = {
   'mule-xml-module': '1.4.2',
 };
 
-const getLatestVersion = (groupId: string, artifactId: string, currentVersion: string): string => {
+const getLatestVersionFromAPI = async (artifactId: string): Promise<string | null> => {
+  try {
+    console.log(`Fetching latest version for ${artifactId} from API...`);
+    const response = await axios.get(`http://localhost:5000/api/connector-version?name=${artifactId}`, {
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+    
+    if (response.data && response.data.version) {
+      console.log(`Successfully fetched version ${response.data.version} for ${artifactId}`);
+      return response.data.version;
+    }
+    
+    console.log(`No version found in API response for ${artifactId}`);
+    return null;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      if (error.response?.status === 404) {
+        console.log(`Connector ${artifactId} not found in API: ${error.response.data?.details || error.message}`);
+      } else if (error.code === 'ERR_NETWORK') {
+        console.error(`Network error while fetching version for ${artifactId}. Please ensure the server is running.`);
+      } else {
+        console.error(`Error fetching version for ${artifactId}:`, error.response?.data?.details || error.message);
+      }
+    } else {
+      console.error(`Unexpected error fetching version for ${artifactId}:`, error);
+    }
+    return null;
+  }
+};
+
+// Modify the getLatestVersion function to handle both sync and async cases
+const getLatestVersion = async (groupId: string, artifactId: string, currentVersion: string): Promise<string> => {
+  try {
+    // Try to get the latest version from the API
+    const latestVersionFromAPI = await getLatestVersionFromAPI(artifactId);
+    if (latestVersionFromAPI) {
+      return latestVersionFromAPI;
+    }
+  } catch (error) {
+    console.error(`Error in getLatestVersion for ${artifactId}:`, error);
+  }
+  
+  // Fallback to static version mapping
+  const staticVersion = latestConnectorVersions[artifactId];
+  if (staticVersion) {
+    console.log(`Using static version ${staticVersion} for ${artifactId} (fallback)`);
+    return staticVersion;
+  }
+  
+  console.log(`No version found for ${artifactId}, using current version ${currentVersion}`);
+  return currentVersion;
+};
+
+// Add a sync version for cases where we can't use async
+const getLatestVersionSync = (groupId: string, artifactId: string, currentVersion: string): string => {
   return latestConnectorVersions[artifactId] || currentVersion;
 };
 

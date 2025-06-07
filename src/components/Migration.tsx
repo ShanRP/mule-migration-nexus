@@ -124,7 +124,7 @@ const Migration = () => {
           const pomXml = await fetchGitHubFileContent(repo.full_name, pomPath, token);
           if (!pomXml || !isMuleApplication(pomXml)) continue;
           
-          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml);
+          const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = await extractMuleInfo(pomXml);
           
           let connectors: any[] = [];
           try {
@@ -177,7 +177,7 @@ const Migration = () => {
           });
         }
       } catch (error) {
-        // skip repo on error
+        console.error(`Error processing repository ${repo.name}:`, error);
       }
     }
     return muleApps;
@@ -246,7 +246,7 @@ const Migration = () => {
               }
             }
             
-            const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = extractMuleInfo(pomXml, artifactJson);
+            const { applicationName, muleRuntime, muleVersion, javaVersion, dependencies } = await extractMuleInfo(pomXml, artifactJson);
             
             let connectors: any[] = [];
             const pomDir = pomPath.substring(0, pomPath.lastIndexOf('/'));
@@ -296,7 +296,7 @@ const Migration = () => {
             });
           }
         } catch (error) {
-          console.error(`Error processing Azure repo ${repo.name}:`, error);
+          console.error(`Error processing repository ${repo.name}:`, error);
         }
       }
       return muleApps;
