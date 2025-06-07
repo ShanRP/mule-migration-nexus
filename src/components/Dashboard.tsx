@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { Github, Cloud, RefreshCw } from 'lucide-react';
+import { Github, Cloud, RefreshCw, Lock, Key, CheckCircle2, AlertCircle, ExternalLink, GitBranch } from 'lucide-react';
 import { useOrganizations } from '@/providers/OrganizationProvider';
 import RepositoryList from './RepositoryList';
 import { isMuleApplication, extractMuleInfo, analyzeMuleConfiguration, extractAzureOrganization, getLatestMuleVersion, getLatestJavaVersion } from '@/utils/muleDetection';
@@ -53,10 +53,9 @@ const Dashboard = () => {
   const [azureOrgUrl, setAzureOrgUrl] = useState('');
   const [connecting, setConnecting] = useState<'github' | 'azure' | null>(null);
   const [applications, setApplications] = useState<MuleApplication[]>([]);
-  const [fetchingRepos, setFetchingRepos] = useState(false);
+  const [fetchingRepos, setFetchingRepos] = useState<'github' | 'azure' | null>(null);
   const [showRepositories, setShowRepositories] = useState(false);
   const [migrating, setMigrating] = useState(false);
-  const [activeTab, setActiveTab] = useState<'github' | 'azure'>('github');
 
   // Reset state when organization changes
   useEffect(() => {
@@ -65,10 +64,6 @@ const Dashboard = () => {
     setGithubToken('');
     setAzureToken('');
     setAzureOrgUrl('');
-    // Set active tab based on organization's repository type
-    if (selectedOrganization?.repository_type) {
-      setActiveTab(selectedOrganization.repository_type === 'azure_devops' ? 'azure' : 'github');
-    }
   }, [selectedOrganization?.id, selectedOrganization?.repository_type]);
 
   const handleConnectGithub = async () => {
@@ -493,55 +488,70 @@ const Dashboard = () => {
     }
   };
 
-  const handleScanRepositories = async () => {
-    const repositoryType = selectedOrganization?.repository_type;
+  const handleScanGithub = async () => {
     const githubToken = selectedOrganization?.github_token;
-    const azureToken = selectedOrganization?.azure_devops_token;
     
-    if (!repositoryType || (!githubToken && !azureToken)) {
-      toast.error('Please connect to a source control provider first.');
+    if (!githubToken) {
+      toast.error('Please connect GitHub first');
       return;
     }
 
-    setFetchingRepos(true);
+    setFetchingRepos('github');
     setApplications([]);
 
     try {
-      let muleApps: MuleApplication[] = [];
-      
-      if (repositoryType === 'github' && githubToken) {
-        console.log('Scanning GitHub repositories...');
-        const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
-        muleApps = await scanGitHubRepositories(githubToken, orgName);
-      } else if (repositoryType === 'azure_devops' && azureToken) {
-        console.log('Scanning Azure DevOps repositories...');
-        const organization = extractAzureOrganization(selectedOrganization?.azure_devops_url || '');
-        if (!organization) {
-          toast.error('Please provide a valid Azure DevOps organization URL');
-          return;
-        }
-        console.log('Azure DevOps organization:', organization);
-        muleApps = await scanAzureRepositories(azureToken, organization);
-      }
+      console.log('Scanning GitHub repositories...');
+      const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
+      const muleApps = await scanGitHubRepositories(githubToken, orgName);
 
       setApplications(muleApps);
       setShowRepositories(true);
       if (muleApps.length > 0) {
-        toast.success(`Found ${muleApps.length} unique Mule application(s) with comprehensive analysis!`);
+        toast.success(`Found ${muleApps.length} unique Mule application(s) in GitHub!`);
       } else {
-        toast.info('No Mule applications found in your repositories.');
+        toast.info('No Mule applications found in your GitHub repositories.');
       }
     } catch (err) {
-      console.error('Repository scanning error:', err);
-      if (err instanceof Error && err.message.includes('401')) {
-        toast.error('Authentication failed. Please check your token and permissions.');
-      } else if (err instanceof Error && err.message.includes('CORS')) {
-        toast.error('CORS restrictions encountered. Please try using a CORS browser extension or contact your administrator.');
-      } else {
-        toast.error('Failed to fetch repositories. Please check your token and permissions.');
-      }
+      console.error('GitHub scanning error:', err);
+      toast.error('Failed to scan GitHub repositories. Please check your token and permissions.');
     } finally {
-      setFetchingRepos(false);
+      setFetchingRepos(null);
+    }
+  };
+
+  const handleScanAzure = async () => {
+    const azureToken = selectedOrganization?.azure_devops_token;
+    
+    if (!azureToken) {
+      toast.error('Please connect Azure DevOps first');
+      return;
+    }
+
+    setFetchingRepos('azure');
+    setApplications([]);
+
+    try {
+      console.log('Scanning Azure DevOps repositories...');
+      const organization = extractAzureOrganization(selectedOrganization?.azure_devops_url || '');
+      if (!organization) {
+        toast.error('Please provide a valid Azure DevOps organization URL');
+        return;
+      }
+      console.log('Azure DevOps organization:', organization);
+      const muleApps = await scanAzureRepositories(azureToken, organization);
+
+      setApplications(muleApps);
+      setShowRepositories(true);
+      if (muleApps.length > 0) {
+        toast.success(`Found ${muleApps.length} unique Mule application(s) in Azure DevOps!`);
+      } else {
+        toast.info('No Mule applications found in your Azure DevOps repositories.');
+      }
+    } catch (err) {
+      console.error('Azure DevOps scanning error:', err);
+      toast.error('Failed to scan Azure DevOps repositories. Please check your token and permissions.');
+    } finally {
+      setFetchingRepos(null);
     }
   };
 
@@ -965,8 +975,6 @@ const Dashboard = () => {
     }
   };
 
-  const isConnected = selectedOrganization?.github_token || selectedOrganization?.azure_devops_token;
-
   if (showRepositories && applications.length > 0) {
     return (
       <div className="container mx-auto p-6 max-w-full w-full overflow-x-auto">
@@ -976,10 +984,6 @@ const Dashboard = () => {
             onClick={() => setShowRepositories(false)}
           >
             ← Back to Dashboard
-          </Button>
-          <Button onClick={handleScanRepositories} disabled={fetchingRepos}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${fetchingRepos ? 'animate-spin' : ''}`} />
-            {fetchingRepos ? 'Scanning...' : 'Rescan Repositories'}
           </Button>
         </div>
         <RepositoryList 
@@ -991,122 +995,246 @@ const Dashboard = () => {
     );
   }
 
+  const isGithubConnected = selectedOrganization?.github_token;
+  const isAzureConnected = selectedOrganization?.azure_devops_token;
+
   return (
-    <div className="container mx-auto p-6 flex flex-col items-center justify-center min-h-[60vh]">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>Connect your Source Control</CardTitle>
-          <CardDescription>
-            Please connect your GitHub or Azure DevOps account to begin migration.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Tabs 
-            value={activeTab} 
-            onValueChange={(value) => setActiveTab(value as 'github' | 'azure')} 
-            className="w-full"
-          >
-            <TabsList className="w-full grid grid-cols-2 mb-4">
-              <TabsTrigger value="github">
-                <Github className="h-4 w-4 mr-2" /> GitHub
-              </TabsTrigger>
-              <TabsTrigger value="azure">
-                <Cloud className="h-4 w-4 mr-2" /> Azure DevOps
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="github">
-              <div className="space-y-4">
-                <Input
-                  placeholder="GitHub Personal Access Token"
-                  value={githubToken}
-                  onChange={e => setGithubToken(e.target.value)}
-                  type="password"
-                />
-                <div className="text-xs text-gray-500">
-                  Need a token?{' '}
+    <div className="container mx-auto p-6 space-y-8">
+      <div className="text-center mb-8">
+        <h1 className="text-3xl font-bold text-foreground mb-2">Source Control Integration</h1>
+        <p className="text-muted-foreground">Connect your repositories to start migrating Mule applications to CloudHub 2.0</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* GitHub Card */}
+        <Card className={`relative overflow-hidden transition-all duration-300 hover:scale-105 ${isGithubConnected ? 'border-green-500 bg-green-50/50' : 'border-border hover:border-primary/50'}`}>
+          <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-black/5 to-black/10 rounded-full -translate-y-16 translate-x-16" />
+          <div className="absolute bottom-0 left-0 w-24 h-24 bg-gradient-to-tr from-primary/5 to-primary/10 rounded-full translate-y-12 -translate-x-12" />
+          
+          <CardHeader className="relative">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className={`p-3 rounded-full ${isGithubConnected ? 'bg-green-100' : 'bg-muted'}`}>
+                  <Github className={`h-6 w-6 ${isGithubConnected ? 'text-green-600' : 'text-muted-foreground'}`} />
+                </div>
+                <div>
+                  <CardTitle className="text-xl">GitHub</CardTitle>
+                  <CardDescription>Connect to your GitHub repositories</CardDescription>
+                </div>
+              </div>
+              {isGithubConnected && (
+                <div className="flex items-center space-x-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
+                  <CheckCircle2 className="h-4 w-4" />
+                  <span>Connected</span>
+                </div>
+              )}
+            </div>
+          </CardHeader>
+          
+          <CardContent className="relative space-y-4">
+            {!isGithubConnected ? (
+              <>
+                <div className="space-y-3">
+                  <Input
+                    placeholder="GitHub Personal Access Token"
+                    value={githubToken}
+                    onChange={e => setGithubToken(e.target.value)}
+                    type="password"
+                    className="bg-background/50"
+                  />
+                  <div className="flex items-center space-x-2 text-xs text-muted-foreground">
+                    <Lock className="h-3 w-3" />
+                    <span>Your token is encrypted and stored securely</span>
+                  </div>
+                </div>
+                
+                <div className="flex items-center justify-between">
                   <a
                     href="https://github.com/settings/tokens"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline"
+                    className="inline-flex items-center space-x-1 text-sm text-primary hover:text-primary/80 transition-colors"
                   >
-                    Generate a GitHub token
+                    <Key className="h-3 w-3" />
+                    <span>Generate token</span>
+                    <ExternalLink className="h-3 w-3" />
                   </a>
+                  
+                  <Button
+                    onClick={handleConnectGithub}
+                    disabled={connecting === 'github' || !githubToken.trim()}
+                    className="px-6"
+                  >
+                    {connecting === 'github' ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        Connecting...
+                      </>
+                    ) : (
+                      <>
+                        <Github className="h-4 w-4 mr-2" />
+                        Connect
+                      </>
+                    )}
+                  </Button>
                 </div>
+              </>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <span className="text-sm font-medium text-green-700">GitHub Connected</span>
+                  </div>
+                  <GitBranch className="h-4 w-4 text-green-600" />
+                </div>
+                
                 <Button
-                  onClick={handleConnectGithub}
-                  disabled={connecting === 'github'}
+                  onClick={handleScanGithub}
+                  disabled={fetchingRepos === 'github'}
                   className="w-full"
+                  variant="outline"
                 >
-                  {connecting === 'github' ? 'Connecting...' : selectedOrganization?.github_token ? 'Connected' : 'Connect GitHub'}
+                  {fetchingRepos === 'github' ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      Scanning Repositories...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Scan for Mule Applications
+                    </>
+                  )}
                 </Button>
               </div>
-            </TabsContent>
-            <TabsContent value="azure">
-              <div className="space-y-4">
-                <Input
-                  placeholder="Azure DevOps Organization URL (e.g., https://dev.azure.com/your-org)"
-                  value={azureOrgUrl}
-                  onChange={e => setAzureOrgUrl(e.target.value)}
-                  type="text"
-                />
-                <Input
-                  placeholder="Azure DevOps Personal Access Token"
-                  value={azureToken}
-                  onChange={e => setAzureToken(e.target.value)}
-                  type="password"
-                />
-                <div className="text-xs text-gray-500">
-                  Need a token?{' '}
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Azure DevOps Card */}
+        <Card className={`relative overflow-hidden transition-all duration-300 hover:scale-105 ${isAzureConnected ? 'border-blue-500 bg-blue-50/50' : 'border-border hover:border-primary/50'}`}>
+          <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-blue-500/5 to-blue-500/10 rounded-full -translate-y-16 translate-x-16" />
+          <div className="absolute bottom-0 left-0 w-24 h-24 bg-gradient-to-tr from-primary/5 to-primary/10 rounded-full translate-y-12 -translate-x-12" />
+          
+          <CardHeader className="relative">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className={`p-3 rounded-full ${isAzureConnected ? 'bg-blue-100' : 'bg-muted'}`}>
+                  <Cloud className={`h-6 w-6 ${isAzureConnected ? 'text-blue-600' : 'text-muted-foreground'}`} />
+                </div>
+                <div>
+                  <CardTitle className="text-xl">Azure DevOps</CardTitle>
+                  <CardDescription>Connect to your Azure DevOps repositories</CardDescription>
+                </div>
+              </div>
+              {isAzureConnected && (
+                <div className="flex items-center space-x-2 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
+                  <CheckCircle2 className="h-4 w-4" />
+                  <span>Connected</span>
+                </div>
+              )}
+            </div>
+          </CardHeader>
+          
+          <CardContent className="relative space-y-4">
+            {!isAzureConnected ? (
+              <>
+                <div className="space-y-3">
+                  <Input
+                    placeholder="Azure DevOps Organization URL"
+                    value={azureOrgUrl}
+                    onChange={e => setAzureOrgUrl(e.target.value)}
+                    type="text"
+                    className="bg-background/50"
+                  />
+                  <Input
+                    placeholder="Azure DevOps Personal Access Token"
+                    value={azureToken}
+                    onChange={e => setAzureToken(e.target.value)}
+                    type="password"
+                    className="bg-background/50"
+                  />
+                  <div className="flex items-center space-x-2 text-xs text-muted-foreground">
+                    <Lock className="h-3 w-3" />
+                    <span>Your credentials are encrypted and stored securely</span>
+                  </div>
+                </div>
+                
+                <div className="flex items-center justify-between">
                   <a
                     href="https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline"
+                    className="inline-flex items-center space-x-1 text-sm text-primary hover:text-primary/80 transition-colors"
                   >
-                    Generate an Azure DevOps token
+                    <Key className="h-3 w-3" />
+                    <span>Generate token</span>
+                    <ExternalLink className="h-3 w-3" />
                   </a>
+                  
+                  <Button
+                    onClick={handleConnectAzure}
+                    disabled={connecting === 'azure' || !azureToken.trim() || !azureOrgUrl.trim()}
+                    className="px-6"
+                  >
+                    {connecting === 'azure' ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        Connecting...
+                      </>
+                    ) : (
+                      <>
+                        <Cloud className="h-4 w-4 mr-2" />
+                        Connect
+                      </>
+                    )}
+                  </Button>
                 </div>
+              </>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle2 className="h-4 w-4 text-blue-600" />
+                    <span className="text-sm font-medium text-blue-700">Azure DevOps Connected</span>
+                  </div>
+                  <GitBranch className="h-4 w-4 text-blue-600" />
+                </div>
+                
                 <Button
-                  onClick={handleConnectAzure}
-                  disabled={connecting === 'azure'}
+                  onClick={handleScanAzure}
+                  disabled={fetchingRepos === 'azure'}
                   className="w-full"
+                  variant="outline"
                 >
-                  {connecting === 'azure' ? 'Connecting...' : selectedOrganization?.azure_devops_token ? 'Connected' : 'Connect Azure DevOps'}
+                  {fetchingRepos === 'azure' ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      Scanning Repositories...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Scan for Mule Applications
+                    </>
+                  )}
                 </Button>
               </div>
-            </TabsContent>
-          </Tabs>
-          
-          {selectedOrganization?.repository_type === 'github' && selectedOrganization?.github_token && (
-            <div className="mt-6 pt-6 border-t">
-              <Button
-                onClick={handleScanRepositories}
-                disabled={fetchingRepos}
-                className="w-full"
-                variant="outline"
-              >
-                <RefreshCw className={`h-4 w-4 mr-2 ${fetchingRepos ? 'animate-spin' : ''}`} />
-                {fetchingRepos ? 'Scanning Repositories...' : 'Scan for Mule Applications'}
-              </Button>
-            </div>
-          )}
-          
-          {selectedOrganization?.repository_type === 'azure_devops' && selectedOrganization?.azure_devops_token && (
-            <div className="mt-6 pt-6 border-t">
-              <Button
-                onClick={handleScanRepositories}
-                disabled={fetchingRepos}
-                className="w-full"
-                variant="outline"
-              >
-                <RefreshCw className={`h-4 w-4 mr-2 ${fetchingRepos ? 'animate-spin' : ''}`} />
-                {fetchingRepos ? 'Scanning Repositories...' : 'Scan for Mule Applications'}
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {!isGithubConnected && !isAzureConnected && (
+        <div className="text-center mt-8 p-6 bg-muted/30 rounded-lg">
+          <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
+          <h3 className="text-lg font-semibold mb-2">Ready to Get Started?</h3>
+          <p className="text-muted-foreground">
+            Connect your source control to begin discovering and migrating your Mule applications to CloudHub 2.0
+          </p>
+        </div>
+      )}
     </div>
   );
 };
