@@ -11,24 +11,6 @@ function getAzureAuthHeader(token: string) {
   return 'Basic ' + btoa(':' + token);
 }
 
-// Helper to detect if string is base64 encoded
-function isBase64(str: string): boolean {
-  try {
-    // Check if string contains only valid base64 characters
-    const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
-    if (!base64Regex.test(str)) {
-      return false;
-    }
-    
-    // Try to decode - if it works and re-encoding gives same result, it's base64
-    const decoded = atob(str);
-    const reencoded = btoa(decoded);
-    return reencoded === str;
-  } catch {
-    return false;
-  }
-}
-
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -167,45 +149,18 @@ async function handleListFiles(body: any) {
 
   try {
     console.log(`Listing files for repository: ${repositoryId} in project: ${project}`);
-    
-    // Add timeout and better error handling
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-    
     const response = await fetch(
       `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?recursionLevel=Full&api-version=7.0`,
       { 
         headers: { 
           'Authorization': getAzureAuthHeader(token), 
           'Accept': 'application/json' 
-        },
-        signal: controller.signal
+        } 
       }
     );
-    
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       console.error(`Azure DevOps API error: ${response.status} - ${response.statusText}`);
-      
-      // Handle specific error cases
-      if (response.status === 404) {
-        console.log(`Repository ${repositoryId} not found or no access`);
-        return new Response(JSON.stringify({ files: [] }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      } else if (response.status === 403) {
-        console.log(`Access denied to repository ${repositoryId}`);
-        return new Response(JSON.stringify({ files: [] }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      } else if (response.status === 500) {
-        console.log(`Server error for repository ${repositoryId}, returning empty files`);
-        return new Response(JSON.stringify({ files: [] }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-      
       throw new Error(`Azure DevOps API error: ${response.status}`);
     }
 
@@ -237,13 +192,8 @@ async function handleListFiles(body: any) {
     }
   } catch (error) {
     console.error('Error listing files:', error);
-    
-    // Return empty files instead of throwing error to prevent breaking the entire process
-    if (error.name === 'AbortError') {
-      console.log(`Timeout occurred for repository ${repositoryId}`);
-    }
-    
-    return new Response(JSON.stringify({ files: [] }), {
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
@@ -261,103 +211,89 @@ async function handleFileContent(body: any) {
   try {
     console.log(`Fetching content for file: ${filePath}`);
     
-    // Use the direct file content API with proper encoding handling
-    const encodedPath = encodeURIComponent('/' + filePath);
-    const endpoint = `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?path=${encodedPath}&includeContent=true&api-version=7.0`;
-    
-    console.log(`Fetching from endpoint: ${endpoint}`);
-    
-    // Add timeout for file content requests
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
-    
-    const response = await fetch(endpoint, { 
-      headers: { 
-        'Authorization': getAzureAuthHeader(token), 
-        'Accept': 'application/json'
-      },
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
-    
-    if (!response.ok) {
-      if (response.status === 404) {
-        console.log(`File not found: ${filePath}`);
-        return new Response(JSON.stringify({ content: null }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-      console.error(`Azure DevOps API error: ${response.status} - ${response.statusText}`);
-      throw new Error(`Azure DevOps API error: ${response.status}`);
-    }
+    // Try different API endpoints and content types
+    const endpoints = [
+      // First try with includeContent=true
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?path=${encodeURIComponent('/' + filePath)}&includeContent=true&api-version=7.0`,
+      // Fallback to basic endpoint
+      `https://dev.azure.com/${organization}/${project}/_apis/git/repositories/${repositoryId}/items?path=${encodeURIComponent('/' + filePath)}&api-version=7.0`
+    ];
 
-    const data = await response.json();
-    console.log(`Response data keys:`, Object.keys(data || {}));
-    
-    // Check if we have content in the response
-    if (data && data.content) {
-      console.log(`Raw content type: ${typeof data.content}, length: ${data.content.length}`);
-      console.log(`First 100 chars of content:`, data.content.substring(0, 100));
+    for (const endpoint of endpoints) {
+      console.log(`Trying endpoint: ${endpoint}`);
       
-      let content: string;
-      
-      // Smart content decoding - check if it's actually base64
-      if (isBase64(data.content)) {
-        try {
-          content = atob(data.content);
-          console.log(`Successfully decoded base64 content for: ${filePath} (${content.length} characters)`);
-        } catch (decodeError) {
-          console.error(`Base64 decode failed for ${filePath}:`, decodeError);
-          // If base64 decode fails, use content as-is
-          content = data.content;
-          console.log(`Using content as-is for: ${filePath}`);
-        }
-      } else {
-        // Content is already plain text
-        content = data.content;
-        console.log(`Content is plain text for: ${filePath} (${content.length} characters)`);
-      }
-      
-      return new Response(JSON.stringify({ content }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    } else if (data && data.url) {
-      // If no direct content but we have a URL, try fetching from the download URL
-      console.log(`No direct content, trying download URL: ${data.url}`);
-      
-      const downloadResponse = await fetch(data.url, {
+      const response = await fetch(endpoint, { 
         headers: { 
-          'Authorization': getAzureAuthHeader(token),
-          'Accept': 'text/plain, application/xml, application/json, */*'
+          'Authorization': getAzureAuthHeader(token), 
+          'Accept': 'application/json'
         },
       });
       
-      if (downloadResponse.ok) {
-        const content = await downloadResponse.text();
-        console.log(`Successfully fetched content via download URL for: ${filePath} (${content.length} characters)`);
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.log(`File not found: ${filePath}`);
+          continue; // Try next endpoint
+        }
+        console.error(`Azure DevOps API error: ${response.status} - ${response.statusText}`);
+        continue; // Try next endpoint
+      }
+
+      const data = await response.json();
+      console.log(`Response data keys:`, Object.keys(data || {}));
+      
+      // Check if we have content in the response
+      if (data && data.content) {
+        try {
+          console.log(`Raw content type: ${typeof data.content}, first 100 chars:`, data.content.substring(0, 100));
+          
+          // Try to decode base64 content
+          const content = atob(data.content);
+          console.log(`Successfully decoded content for: ${filePath} (${content.length} characters)`);
+          
+          return new Response(JSON.stringify({ content }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        } catch (decodeError) {
+          console.error(`Error decoding content for ${filePath}:`, decodeError);
+          console.log(`Trying to return content as-is`);
+          
+          // If base64 decode fails, try returning content as-is
+          return new Response(JSON.stringify({ content: data.content }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+      } else if (data && data.url) {
+        // If no content but we have a URL, try fetching from the download URL
+        console.log(`No direct content, trying download URL: ${data.url}`);
         
-        return new Response(JSON.stringify({ content }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        const downloadResponse = await fetch(data.url, {
+          headers: { 
+            'Authorization': getAzureAuthHeader(token),
+            'Accept': 'text/plain, application/xml, */*'
+          },
         });
-      } else {
-        console.error(`Download URL failed: ${downloadResponse.status} - ${downloadResponse.statusText}`);
+        
+        if (downloadResponse.ok) {
+          const content = await downloadResponse.text();
+          console.log(`Successfully fetched content via download URL for: ${filePath} (${content.length} characters)`);
+          
+          return new Response(JSON.stringify({ content }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        } else {
+          console.error(`Download URL failed: ${downloadResponse.status} - ${downloadResponse.statusText}`);
+        }
       }
     }
     
-    console.log(`No content found for: ${filePath}`);
+    console.log(`No content found for: ${filePath} after trying all endpoints`);
     return new Response(JSON.stringify({ content: null }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (error) {
     console.error(`Error fetching file content for ${filePath}:`, error);
-    
-    // Return null content instead of throwing error
-    if (error.name === 'AbortError') {
-      console.log(`Timeout occurred for file ${filePath}`);
-    }
-    
-    return new Response(JSON.stringify({ content: null }), {
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }

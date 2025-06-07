@@ -4,9 +4,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ExternalLink, CheckCircle2, AlertTriangle, Save } from 'lucide-react';
+import { ExternalLink, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { getLatestMuleVersion, getLatestJavaVersion } from '@/utils/muleDetection';
-import { toast } from 'sonner';
 
 interface MuleDependency {
   groupId: string;
@@ -42,7 +41,6 @@ interface MuleApplication {
   pomPaths?: string[];
   artifactJsonPaths?: string[];
   projectXmlPaths?: string[];
-  savedSelections?: MigrationSelections;
 }
 
 interface MigrationSelections {
@@ -58,7 +56,6 @@ interface MigrationDetailsDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onMigrate: (app: MuleApplication, selections: MigrationSelections) => Promise<void>;
-  onSaveSelections: (app: MuleApplication, selections: MigrationSelections) => void;
   repositoryType: string;
 }
 
@@ -67,7 +64,6 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
   isOpen,
   onClose,
   onMigrate,
-  onSaveSelections,
   repositoryType
 }) => {
   const [selections, setSelections] = useState<MigrationSelections>({
@@ -82,16 +78,13 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
   // Initialize selections when application changes
   useEffect(() => {
     if (application) {
-      // Use saved selections if available, otherwise default to all selected
-      const defaultSelections = {
+      setSelections({
         muleRuntime: true,
         javaVersion: true,
         minMuleVersion: true,
         dependencies: application.dependencies.map(dep => dep.artifactId),
         connectors: application.connectors.map(conn => conn.name)
-      };
-
-      setSelections(application.savedSelections || defaultSelections);
+      });
     }
   }, [application]);
 
@@ -133,13 +126,6 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
         ? prev.connectors.filter(name => name !== connectorName)
         : [...prev.connectors, connectorName]
     }));
-  };
-
-  const handleSave = () => {
-    if (!application) return;
-    
-    onSaveSelections(application, selections);
-    toast.success('Selection preferences saved successfully!');
   };
 
   const handleMigrate = async () => {
@@ -189,10 +175,6 @@ const MigrationDetailsDialog: React.FC<MigrationDetailsDialogProps> = ({
             </Button>
             <Button variant="outline" size="sm" onClick={handleDeselectAll}>
               Deselect All
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleSave} className="flex items-center space-x-1">
-              <Save className="h-3 w-3" />
-              <span>Save Selections</span>
             </Button>
           </div>
 
