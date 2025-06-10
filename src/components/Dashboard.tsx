@@ -54,6 +54,14 @@ interface MigrationRules {
   dependencyVersions: { artifactId: string; version: string; }[];
 }
 
+interface MigrationSelections {
+  muleRuntime: boolean;
+  javaVersion: boolean;
+  minMuleVersion: boolean;
+  dependencies: string[];
+  connectors: string[];
+}
+
 const Dashboard = () => {
   const { selectedOrganization, updateOrganization } = useOrganizations();
   const [githubToken, setGithubToken] = useState('');
@@ -226,19 +234,19 @@ const Dashboard = () => {
             
             const artifactJsonPaths = [
               `${pomDir}/src/main/mule/mule-artifact.json`,
-              `${pomDir}/mule-artifact.json`,
-              `${pomDir}/src/main/resources/mule-artifact.json`
+                `${pomDir}/mule-artifact.json`,
+                `${pomDir}/src/main/resources/mule-artifact.json`
             ].filter(path => path !== '/');
-            
+              
             for (const ajPath of artifactJsonPaths) {
               // console.log(`Looking for artifact JSON at: ${ajPath}`);
               const artifactJsonContent = await fetchGitHubFileContent(repo.full_name, ajPath, token);
               if (artifactJsonContent) {
-                try {
+                  try {
                   artifactJson = JSON.parse(artifactJsonContent);
                   // console.log('Successfully parsed artifact JSON:', artifactJson);
-                  break;
-                } catch (error) {
+                    break;
+                  } catch (error) {
                   console.log('Error parsing artifact JSON:', error);
                 }
               }
@@ -531,7 +539,7 @@ const Dashboard = () => {
 
     try {
       // console.log('Scanning GitHub repositories...');
-      const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
+        const orgName = selectedOrganization?.github_url?.split('/').pop() || '';
       const muleApps = await scanGitHubRepositories(githubToken, orgName);
 
       setApplications(muleApps);
@@ -562,11 +570,11 @@ const Dashboard = () => {
 
     try {
       // console.log('Scanning Azure DevOps repositories...');
-      const organization = extractAzureOrganization(selectedOrganization?.azure_devops_url || '');
-      if (!organization) {
-        toast.error('Please provide a valid Azure DevOps organization URL');
-        return;
-      }
+        const organization = extractAzureOrganization(selectedOrganization?.azure_devops_url || '');
+        if (!organization) {
+          toast.error('Please provide a valid Azure DevOps organization URL');
+          return;
+        }
       // console.log('Azure DevOps organization:', organization);
       const muleApps = await scanAzureRepositories(azureToken, organization);
 
@@ -586,11 +594,11 @@ const Dashboard = () => {
   };
 
   // Enhanced function to update dependency versions in POM XML
-  const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[]): string => {
+  const updatePomDependencies = (pomXml: string, dependencies: MuleDependency[], selections: MigrationSelections, rules: MigrationRules): string => {
     let updatedPom = pomXml;
     
     // Update app.runtime version to latest
-    const latestMuleVersion = getLatestMuleVersion();
+    const latestMuleVersion = selections.muleRuntime ? rules.muleVersion : getLatestMuleVersion(); // Use rule-based if selected
     updatedPom = updatedPom.replace(
       /<app\.runtime>.*?<\/app\.runtime>/g,
       `<app.runtime>${latestMuleVersion}</app.runtime>`
@@ -616,15 +624,20 @@ const Dashboard = () => {
     
     // Update dependencies to their latest versions
     dependencies.forEach(dep => {
-      if (dep.latestVersion && dep.latestVersion !== dep.version) {
-        // console.log(`Updating ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
-        
-        const dependencyRegex = new RegExp(
-          `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
-          'g'
-        );
-        
-        updatedPom = updatedPom.replace(dependencyRegex, `$1${dep.latestVersion}$2`);
+      if (selections.dependencies.includes(dep.artifactId)) { // Only update selected dependencies
+        // Get rule-based dependency version
+        const ruleBasedVersion = rules.dependencyVersions.find(ruleDep => ruleDep.artifactId === dep.artifactId)?.version || dep.latestVersion;
+
+        if (ruleBasedVersion && ruleBasedVersion !== dep.version) {
+          // console.log(`Updating ${dep.artifactId} from ${dep.version} to ${dep.latestVersion}`);
+          
+          const dependencyRegex = new RegExp(
+            `(<dependency>[\\s\\S]*?<groupId>${dep.groupId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/groupId>[\\s\\S]*?<artifactId>${dep.artifactId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/artifactId>[\\s\\S]*?<version>).*?(<\\/version>[\\s\\S]*?<\\/dependency>)`,
+            'g'
+          );
+          
+          updatedPom = updatedPom.replace(dependencyRegex, `$1${ruleBasedVersion}$2`);
+        }
       }
     });
     
@@ -640,13 +653,18 @@ const Dashboard = () => {
   };
 
   // Function to replace CloudHub connectors with Logger in XML files
-  const replaceCloudHubConnectors = (xmlContent: string): string => {
+  const replaceCloudHubConnectors = (xmlContent: string, selections: MigrationSelections, rules: MigrationRules): string => {
     let updatedXml = xmlContent;
     
     console.log('Replacing CloudHub connectors with Logger connectors...');
     
+    // Get replacement connector from migration rules, default to 'logger'
+    const ruleBasedReplacement = selections.connectors.some(conn => conn.toLowerCase().includes('cloudhub'))
+      ? (rules.connectorReplacements.find(rep => rep.from.toLowerCase() === 'cloudhub')?.to || 'logger')
+      : 'logger';
+
     // Add Logger namespace if not present
-    if (!updatedXml.includes('xmlns:logger=')) {
+    if (ruleBasedReplacement === 'logger' && !updatedXml.includes('xmlns:logger=')) {
       const muleTag = updatedXml.match(/<mule[^>]*>/);
       if (muleTag) {
         const updatedMuleTag = muleTag[0].replace('>', ' xmlns:logger="http://www.mulesoft.org/schema/mule/logger" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/logger http://www.mulesoft.org/schema/mule/logger/current/mule-logger.xsd">');
@@ -708,7 +726,7 @@ const Dashboard = () => {
   };
 
   // GitHub migration function
-  const migrateGitHubApplication = async (app: MuleApplication, rules: MigrationRules) => {
+  const migrateGitHubApplication = async (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules) => {
     console.log('Starting GitHub migration for app:', app.applicationName);
     
     const repoPath = app.repository.replace('https://github.com/', '');
@@ -748,7 +766,7 @@ const Dashboard = () => {
           const pomSha = pomRes.data.sha;
           const pomXml = atob(pomRes.data.content.replace(/\n/g, ''));
           
-          const updatedPom = updatePomDependencies(pomXml, app.dependencies);
+          const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections, rules);
           
           await axios.put(
             `https://api.github.com/repos/${repoPath}/contents/${pomPath}`,
@@ -780,8 +798,8 @@ const Dashboard = () => {
           
           const updatedAj = { 
             ...ajJson,
-            javaSpecificationVersions: [getLatestJavaVersion()],
-            minMuleVersion: getLatestMuleVersion()
+            javaSpecificationVersions: [rules.javaVersion],
+            minMuleVersion: rules.minMuleVersion
           };
           
           await axios.put(
@@ -812,7 +830,7 @@ const Dashboard = () => {
           const xmlSha = xmlRes.data.sha;
           const xmlContent = atob(xmlRes.data.content.replace(/\n/g, ''));
           
-          const updatedXml = replaceCloudHubConnectors(xmlContent) + '\n<!-- Updated for CloudHub 2.0 migration -->';
+          const updatedXml = replaceCloudHubConnectors(xmlContent, selections, rules) + '\n<!-- Updated for CloudHub 2.0 migration -->';
           
           await axios.put(
             `https://api.github.com/repos/${repoPath}/contents/${xmlPath}`,
@@ -833,7 +851,7 @@ const Dashboard = () => {
   };
 
   // Azure DevOps migration function
-  const migrateAzureApplication = async (app: MuleApplication, rules: MigrationRules) => {
+  const migrateAzureApplication = async (app: MuleApplication, selections: MigrationSelections, rules: MigrationRules) => {
     try {
       // console.log('Starting Azure DevOps migration for app:', app.applicationName);
       
@@ -859,7 +877,7 @@ const Dashboard = () => {
         for (const pomPath of app.pomPaths) {
           let pomXml = await azureApi.getFileContent(project, repoId, pomPath);
           if (pomXml && typeof pomXml === 'string') {
-            const updatedPom = updatePomDependencies(pomXml, app.dependencies);
+            const updatedPom = updatePomDependencies(pomXml, app.dependencies, selections, rules);
             filesToCommit.push({ path: pomPath, content: updatedPom });
           }
         }
@@ -883,8 +901,8 @@ const Dashboard = () => {
           
           const updatedAj = { 
             ...ajJson,
-            javaSpecificationVersions: [getLatestJavaVersion()],
-            minMuleVersion: getLatestMuleVersion()
+            javaSpecificationVersions: [rules.javaVersion],
+            minMuleVersion: rules.minMuleVersion
           };
           
           filesToCommit.push({ path: ajPath, content: JSON.stringify(updatedAj, null, 2) });
@@ -897,7 +915,7 @@ const Dashboard = () => {
         for (const xmlPath of app.projectXmlPaths) {
           let xmlContent = await azureApi.getFileContent(project, repoId, xmlPath);
           if (xmlContent && typeof xmlContent === 'string') {
-            const updatedXml = replaceCloudHubConnectors(xmlContent) + '\n<!-- Updated for CloudHub 2.0 migration -->';
+            const updatedXml = replaceCloudHubConnectors(xmlContent, selections, rules) + '\n<!-- Updated for CloudHub 2.0 migration -->';
             filesToCommit.push({ path: xmlPath, content: updatedXml });
           }
         }
@@ -959,10 +977,19 @@ const Dashboard = () => {
               : a
           ));
           
+          // Create default selections (all items selected)
+          const selections: MigrationSelections = {
+            muleRuntime: true,
+            javaVersion: true,
+            minMuleVersion: true,
+            dependencies: app.dependencies.map(dep => dep.artifactId),
+            connectors: app.connectors.map(conn => conn.name)
+          };
+
           if (repositoryType === 'github') {
-            await migrateGitHubApplication(app, rules);
+            await migrateGitHubApplication(app, selections, rules);
           } else if (repositoryType === 'azure_devops') {
-            await migrateAzureApplication(app, rules);
+            await migrateAzureApplication(app, selections, rules);
           }
           
           // Update application status to completed
@@ -1077,13 +1104,13 @@ const Dashboard = () => {
             {!isGithubConnected ? (
               <>
                 <div className="space-y-3">
-                  <Input
-                    placeholder="GitHub Personal Access Token"
-                    value={githubToken}
-                    onChange={e => setGithubToken(e.target.value)}
-                    type="password"
+                <Input
+                  placeholder="GitHub Personal Access Token"
+                  value={githubToken}
+                  onChange={e => setGithubToken(e.target.value)}
+                  type="password"
                     className="bg-background/50"
-                  />
+                />
                   <div className="flex items-center space-x-2 text-xs text-muted-foreground">
                     <Lock className="h-3 w-3" />
                     <span>Your token is encrypted and stored securely</span>
@@ -1112,11 +1139,11 @@ const Dashboard = () => {
                         Cancel
                       </Button>
                     )}
-                    <Button
-                      onClick={handleConnectGithub}
+                <Button
+                  onClick={handleConnectGithub}
                       disabled={connecting === 'github' || !githubToken.trim()}
                       className="px-6"
-                    >
+                >
                       {connecting === 'github' ? (
                         <>
                           <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
@@ -1128,8 +1155,8 @@ const Dashboard = () => {
                           {reconnecting === 'github' ? 'Reconnect' : 'Connect'}
                         </>
                       )}
-                    </Button>
-                  </div>
+                </Button>
+              </div>
                 </div>
               </>
             ) : (
@@ -1205,20 +1232,20 @@ const Dashboard = () => {
             {!isAzureConnected ? (
               <>
                 <div className="space-y-3">
-                  <Input
+                <Input
                     placeholder="Azure DevOps Organization URL"
-                    value={azureOrgUrl}
-                    onChange={e => setAzureOrgUrl(e.target.value)}
-                    type="text"
+                  value={azureOrgUrl}
+                  onChange={e => setAzureOrgUrl(e.target.value)}
+                  type="text"
                     className="bg-background/50"
-                  />
-                  <Input
-                    placeholder="Azure DevOps Personal Access Token"
-                    value={azureToken}
-                    onChange={e => setAzureToken(e.target.value)}
-                    type="password"
+                />
+                <Input
+                  placeholder="Azure DevOps Personal Access Token"
+                  value={azureToken}
+                  onChange={e => setAzureToken(e.target.value)}
+                  type="password"
                     className="bg-background/50"
-                  />
+                />
                   <div className="flex items-center space-x-2 text-xs text-muted-foreground">
                     <Lock className="h-3 w-3" />
                     <span>Your credentials are encrypted and stored securely</span>
@@ -1239,15 +1266,15 @@ const Dashboard = () => {
                   
                   <div className="flex space-x-2">
                     {reconnecting === 'azure' && (
-                      <Button
+                <Button
                         variant="outline"
                         size="sm"
                         onClick={handleCancelReconnect}
                       >
                         Cancel
-                      </Button>
+                </Button>
                     )}
-                    <Button
+              <Button
                       onClick={handleConnectAzure}
                       disabled={connecting === 'azure' || !azureToken.trim() || !azureOrgUrl.trim()}
                       className="px-6"
@@ -1263,8 +1290,8 @@ const Dashboard = () => {
                           {reconnecting === 'azure' ? 'Reconnect' : 'Connect'}
                         </>
                       )}
-                    </Button>
-                  </div>
+              </Button>
+            </div>
                 </div>
               </>
             ) : (
@@ -1277,12 +1304,12 @@ const Dashboard = () => {
                   <GitBranch className="h-4 w-4 text-blue-600" />
                 </div>
                 
-                <Button
+              <Button
                   onClick={handleScanAzure}
                   disabled={fetchingRepos === 'azure'}
-                  className="w-full"
-                  variant="outline"
-                >
+                className="w-full"
+                variant="outline"
+              >
                   {fetchingRepos === 'azure' ? (
                     <>
                       <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
@@ -1294,11 +1321,11 @@ const Dashboard = () => {
                       Scan for Mule Applications
                     </>
                   )}
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
       </div>
 
       {!isGithubConnected && !isAzureConnected && (
